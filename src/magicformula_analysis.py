@@ -26,7 +26,7 @@ def run_magic_formula_analysis(
         try:
             sector_by_ticker[r.ticker] = market_data.get_sector(r.ticker)
         except market_data.MarketDataError:
-            sector_by_ticker[r.ticker] = "לא ידוע"
+            sector_by_ticker[r.ticker] = "Unknown"
 
     by_sector: dict[str, list[str]] = defaultdict(list)
     for r in results:
@@ -49,13 +49,13 @@ def run_magic_formula_analysis(
 
         rows.append(
             {
-                "חברה": f"{r.ticker} - {r.name}",
-                "סיכום": summary,
-                "מקורות": "; ".join(f"{k}: {v}" for k, v in links.items()),
-                "השערה": narrative.magic_formula_hypothesis(r.name, None, None),
-                "חברות דומות (מאגר)": ", ".join(similar[:5]) if similar else "-",
-                "קרנות מהרשימה שמחזיקות": ", ".join(fund_holders) if fund_holders else "-",
-                "שווי שוק ($M)": r.market_cap_million,
+                "Company": f"{r.ticker} - {r.name}",
+                "Summary": summary,
+                "Sources": "; ".join(f"{k}: {v}" for k, v in links.items()),
+                "Hypothesis": narrative.magic_formula_hypothesis(r.name, None, None),
+                "Similar companies (screener)": ", ".join(similar[:5]) if similar else "-",
+                "Funds holding it": ", ".join(fund_holders) if fund_holders else "-",
+                "Market cap ($M)": r.market_cap_million,
             }
         )
 

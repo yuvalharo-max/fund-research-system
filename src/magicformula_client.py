@@ -37,8 +37,8 @@ def _session_login() -> requests.Session:
     password = os.environ.get("MAGICFORMULA_PASSWORD")
     if not email or not password:
         raise MagicFormulaError(
-            "MAGICFORMULA_EMAIL / MAGICFORMULA_PASSWORD לא מוגדרים ב-.env. "
-            "העתק את .env.example ל-.env ומלא את הפרטים שלך."
+            "MAGICFORMULA_EMAIL / MAGICFORMULA_PASSWORD are not set in .env. "
+            "Copy .env.example to .env and fill in your details."
         )
 
     session = requests.Session()
@@ -46,12 +46,12 @@ def _session_login() -> requests.Session:
         login_page = session.get(f"{BASE_URL}/Account/LogOn", headers=HEADERS, timeout=TIMEOUT)
         login_page.raise_for_status()
     except requests.RequestException as exc:
-        raise MagicFormulaError(f"נכשלה טעינת עמוד ההתחברות: {exc}") from exc
+        raise MagicFormulaError(f"Failed to load the login page: {exc}") from exc
 
     soup = BeautifulSoup(login_page.text, "lxml")
     token_input = soup.find("input", {"name": "__RequestVerificationToken"})
     if token_input is None:
-        raise MagicFormulaError("לא נמצא __RequestVerificationToken בעמוד ההתחברות — ייתכן שמבנה האתר השתנה.")
+        raise MagicFormulaError("__RequestVerificationToken not found on the login page — the site structure may have changed.")
     token = token_input.get("value", "")
 
     try:
@@ -64,11 +64,11 @@ def _session_login() -> requests.Session:
         )
         resp.raise_for_status()
     except requests.RequestException as exc:
-        raise MagicFormulaError(f"נכשלה בקשת ההתחברות: {exc}") from exc
+        raise MagicFormulaError(f"Login request failed: {exc}") from exc
 
     if "logon" in resp.url.lower() or "log on" in resp.text.lower()[:2000]:
         raise MagicFormulaError(
-            "ההתחברות ל-Magic Formula Investing נכשלה — בדוק MAGICFORMULA_EMAIL/PASSWORD ב-.env."
+            "Login to Magic Formula Investing failed — check MAGICFORMULA_EMAIL/PASSWORD in .env."
         )
     return session
 
@@ -80,7 +80,7 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
         page = session.get(f"{BASE_URL}/Screening/StockScreening", headers=HEADERS, timeout=TIMEOUT)
         page.raise_for_status()
     except requests.RequestException as exc:
-        raise MagicFormulaError(f"נכשלה טעינת עמוד הסקרינר: {exc}") from exc
+        raise MagicFormulaError(f"Failed to load the screener page: {exc}") from exc
 
     soup = BeautifulSoup(page.text, "lxml")
     form = None
@@ -92,7 +92,7 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
             break
     if form is None:
         raise MagicFormulaError(
-            "לא נמצא טופס הסקרינר בעמוד המחובר — ייתכן שמבנה האתר השתנה או שההתחברות לא הצליחה."
+            "Screener form not found on the authenticated page — the site structure may have changed, or login failed."
         )
 
     action = form.get("action") or "/Screening/StockScreening"
@@ -121,7 +121,7 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
         result_resp = session.post(action_url, data=payload, headers=HEADERS, timeout=TIMEOUT)
         result_resp.raise_for_status()
     except requests.RequestException as exc:
-        raise MagicFormulaError(f"נכשלה בקשת הסקרינר: {exc}") from exc
+        raise MagicFormulaError(f"Screener request failed: {exc}") from exc
 
     return _parse_results(result_resp.text)
 
@@ -130,7 +130,7 @@ def _parse_results(html: str) -> list[ScreenerResult]:
     soup = BeautifulSoup(html, "lxml")
     table = soup.find("table", id=re.compile("grid|result|screen", re.I)) or soup.find("table")
     if table is None:
-        raise MagicFormulaError("לא נמצאה טבלת תוצאות בעמוד הסקרינר — ייתכן שמבנה האתר השתנה.")
+        raise MagicFormulaError("No results table found on the screener page — the site structure may have changed.")
 
     results: list[ScreenerResult] = []
     for tr in table.select("tbody tr") or table.find_all("tr")[1:]:
@@ -158,6 +158,7 @@ def _parse_results(html: str) -> list[ScreenerResult]:
 
     if not results:
         raise MagicFormulaError(
-            "לא נמצאו תוצאות בטבלת הסקרינר — ייתכן שמבנה האתר השתנה. יש לבדוק ידנית את /Screening/StockScreening."
+            "No results found in the screener table — the site structure may have changed. "
+            "Check /Screening/StockScreening manually."
         )
     return results

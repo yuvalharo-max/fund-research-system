@@ -1,4 +1,4 @@
-"""כלי מחקר שוק — ניתוח קרנות (Dataroma) ו-Magic Formula Investing."""
+"""Market research tool — fund 13F analysis (Dataroma) and Magic Formula Investing."""
 from collections import defaultdict
 
 import streamlit as st
@@ -8,10 +8,10 @@ from src import cache, dataroma_client, magicformula_analysis, magicformula_clie
 
 load_dotenv()
 
-st.set_page_config(page_title="כלי מחקר שוק", layout="wide")
-st.title("כלי מחקר שוק ואיתור רעיונות השקעה")
+st.set_page_config(page_title="Market Research Tool", layout="wide")
+st.title("Market Research & Investment Idea Finder")
 
-tab1, tab2 = st.tabs(["ניתוח קרנות (Funds Analysis)", "ניתוח מאגר Magic Formula"])
+tab1, tab2 = st.tabs(["Funds Analysis", "Magic Formula Analysis"])
 
 
 def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
@@ -26,50 +26,55 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
 
 with tab1:
     st.write(
-        "מזהה מניות בהן קרן מהרשימה **הגדילה אחזקה** ברבעון האחרון, "
-        "בזמן שהמחיר המדווח **צנח ב-10% ומעלה** לעומת הרבעון הקודם."
+        "Finds stocks where a fund on the list **increased its position** last quarter, "
+        "while the reported price **dropped 10% or more** versus the prior quarter."
     )
     last_run = cache.load_latest_timestamp("funds")
     if last_run:
-        st.caption(f"עודכן לאחרונה: {last_run}")
+        st.caption(f"Last updated: {last_run}")
 
-    if st.button("הרץ ניתוח קרנות", type="primary"):
-        progress = st.progress(0.0, text="מתחיל...")
+    with st.expander("Quick test (optional)"):
+        fund_limit = st.number_input(
+            "Limit to first N funds (0 = all 83 funds)", min_value=0, value=0, step=5
+        )
+
+    if st.button("Run Funds Analysis", type="primary"):
+        progress = st.progress(0.0, text="Starting...")
         status = st.empty()
 
         def _update(i: int, total: int, label: str):
             progress.progress(i / total, text=f"({i}/{total}) {label}")
 
         try:
-            df = funds_analysis.run_funds_analysis(progress_callback=_update)
+            df = funds_analysis.run_funds_analysis(progress_callback=_update, fund_limit=fund_limit or None)
         except (dataroma_client.DataromaError,) as exc:
-            st.error(f"הריצה נכשלה: {exc}")
+            st.error(f"Run failed: {exc}")
         else:
             progress.empty()
             if df.empty:
-                st.info("לא נמצאו מניות שעונות על שני התנאים בריצה הזו.")
+                st.info("No stocks matched both conditions in this run.")
             else:
                 st.dataframe(df, use_container_width=True)
                 st.download_button(
-                    "ייצוא ל-CSV", df.to_csv(index=False).encode("utf-8-sig"), "funds_analysis.csv", "text/csv"
+                    "Export to CSV", df.to_csv(index=False).encode("utf-8-sig"), "funds_analysis.csv", "text/csv"
                 )
             timestamp = cache.save_run("funds", df)
-            st.caption(f"עודכן לאחרונה: {timestamp}")
+            st.caption(f"Last updated: {timestamp}")
 
 with tab2:
-    st.write("מציג חברות ממאגר Magic Formula Investing עם שווי שוק מעל מיליארד דולר.")
+    st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
     last_run = cache.load_latest_timestamp("magicformula")
     if last_run:
-        st.caption(f"עודכן לאחרונה: {last_run}")
+        st.caption(f"Last updated: {last_run}")
 
-    if st.button("עדכן ניתוח Magic Formula", type="primary"):
-        progress = st.progress(0.0, text="מתחיל...")
+    if st.button("Update Magic Formula Analysis", type="primary"):
+        progress = st.progress(0.0, text="Starting...")
 
         def _scrape_update(i: int, total: int, name: str):
-            progress.progress(i / total, text=f"({i}/{total}) שולף רשימת קרנות: {name}")
+            progress.progress(i / total, text=f"({i}/{total}) Fetching fund list: {name}")
 
         def _update(i: int, total: int, name: str):
-            progress.progress(i / total, text=f"({i}/{total}) מעשיר מידע: {name}")
+            progress.progress(i / total, text=f"({i}/{total}) Enriching data: {name}")
 
         try:
             holdings_index = _holdings_by_stock(progress_callback=_scrape_update)
@@ -77,18 +82,18 @@ with tab2:
                 holdings_by_stock=holdings_index, progress_callback=_update
             )
         except (magicformula_client.MagicFormulaError, dataroma_client.DataromaError) as exc:
-            st.error(f"הריצה נכשלה: {exc}")
+            st.error(f"Run failed: {exc}")
         else:
             progress.empty()
             if df.empty:
-                st.info("לא נמצאו תוצאות בריצה הזו.")
+                st.info("No results found in this run.")
             else:
                 st.dataframe(df, use_container_width=True)
                 st.download_button(
-                    "ייצוא ל-CSV",
+                    "Export to CSV",
                     df.to_csv(index=False).encode("utf-8-sig"),
                     "magic_formula_analysis.csv",
                     "text/csv",
                 )
             timestamp = cache.save_run("magicformula", df)
-            st.caption(f"עודכן לאחרונה: {timestamp}")
+            st.caption(f"Last updated: {timestamp}")

@@ -36,7 +36,7 @@ def _get(url: str) -> BeautifulSoup:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
-        raise DataromaError(f"נכשלה קריאה ל-Dataroma ({url}): {exc}") from exc
+        raise DataromaError(f"Dataroma request failed ({url}): {exc}") from exc
     return BeautifulSoup(resp.text, "lxml")
 
 
@@ -58,7 +58,7 @@ def get_superinvestors() -> list[dict]:
         seen.add(ticker)
         funds.append({"ticker": ticker, "name": name})
     if not funds:
-        raise DataromaError("לא נמצאה רשימת קרנות בדף הבית של Dataroma — ייתכן שמבנה האתר השתנה.")
+        raise DataromaError("No fund list found on the Dataroma home page — the site structure may have changed.")
     return funds
 
 
@@ -103,7 +103,7 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
 
     table = soup.find("table", id="grid")
     if table is None:
-        raise DataromaError(f"לא נמצאה טבלת אחזקות עבור {fund_ticker} — ייתכן שמבנה האתר השתנה.")
+        raise DataromaError(f"No holdings table found for {fund_ticker} — the site structure may have changed.")
 
     holdings: list[Holding] = []
     for tr in table.select("tbody tr"):
@@ -144,7 +144,7 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
         )
 
     if not holdings and declared_count != 0:
-        raise DataromaError(f"לא נמצאו אחזקות עבור {fund_ticker} — ייתכן שמבנה האתר השתנה.")
+        raise DataromaError(f"No holdings found for {fund_ticker} — the site structure may have changed.")
 
     return holdings, portfolio_date
 

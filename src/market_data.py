@@ -17,15 +17,15 @@ def get_ticker_info(ticker: str) -> dict:
     try:
         info = yf.Ticker(ticker).get_info()
     except Exception as exc:
-        raise MarketDataError(f"לא ניתן לשלוף מידע עבור {ticker}: {exc}") from exc
+        raise MarketDataError(f"Could not fetch info for {ticker}: {exc}") from exc
     if not info:
-        raise MarketDataError(f"לא נמצא מידע עבור {ticker}")
+        raise MarketDataError(f"No info found for {ticker}")
     return info
 
 
 def get_sector(ticker: str) -> str:
     info = get_ticker_info(ticker)
-    return info.get("sector") or "לא ידוע"
+    return info.get("sector") or "Unknown"
 
 
 def get_market_cap(ticker: str) -> float | None:
@@ -37,7 +37,7 @@ def get_business_summary(ticker: str, max_sentences: int = 3) -> str:
     info = get_ticker_info(ticker)
     summary = info.get("longBusinessSummary") or ""
     if not summary:
-        return "אין תקציר עסקי זמין."
+        return "No business summary available."
     sentences = [s.strip() for s in summary.split(". ") if s.strip()]
     short = ". ".join(sentences[:max_sentences])
     return short + ("." if not short.endswith(".") else "")
@@ -50,7 +50,7 @@ def get_price_on_or_before(ticker: str, target_date: dt.date) -> float | None:
     try:
         hist = yf.Ticker(ticker).history(start=start.isoformat(), end=end.isoformat())
     except Exception as exc:
-        raise MarketDataError(f"לא ניתן לשלוף היסטוריית מחירים עבור {ticker}: {exc}") from exc
+        raise MarketDataError(f"Could not fetch price history for {ticker}: {exc}") from exc
     if hist.empty:
         return None
     hist = hist[hist.index.date <= target_date]
@@ -96,5 +96,5 @@ def ir_links(ticker: str, company_name: str) -> dict[str, str]:
     query = f"{company_name} investor relations".replace(" ", "+")
     return {
         "Yahoo Finance": f"https://finance.yahoo.com/quote/{ticker}",
-        "חיפוש IR (Google)": f"https://www.google.com/search?q={query}",
+        "IR Search (Google)": f"https://www.google.com/search?q={query}",
     }

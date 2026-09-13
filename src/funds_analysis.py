@@ -25,12 +25,14 @@ def _prev_quarter_date(d: dt.date) -> dt.date:
     return d - dt.timedelta(days=91)
 
 
-def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
+def run_funds_analysis(progress_callback=None, fund_limit: int | None = None) -> pd.DataFrame:
     funds = dataroma_client.get_superinvestors()
+    if fund_limit:
+        funds = funds[:fund_limit]
 
     def _scrape_progress(i, total, name):
         if progress_callback:
-            progress_callback(i, total, f"שולף נתונים: {name}")
+            progress_callback(i, total, f"Fetching data: {name}")
 
     all_holdings, raw_dates = dataroma_client.get_all_holdings(funds, progress_callback=_scrape_progress)
     portfolio_dates = {ticker: _parse_portfolio_date(d) for ticker, d in raw_dates.items()}
@@ -51,7 +53,7 @@ def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
     ]
 
     if progress_callback:
-        progress_callback(1, 1, f"בודק מחירים היסטוריים עבור {len(add_candidates)} אחזקות...")
+        progress_callback(1, 1, f"Checking historical prices for {len(add_candidates)} holdings...")
 
     price_pairs = list(
         {(h.stock_ticker, _prev_quarter_date(portfolio_dates[h.fund_ticker])) for h in add_candidates}
@@ -69,7 +71,7 @@ def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
         matches.append((h, drop_pct))
 
     if progress_callback:
-        progress_callback(1, 1, f"מעשיר {len(matches)} רעיונות עם מידע חברה...")
+        progress_callback(1, 1, f"Enriching {len(matches)} ideas with company data...")
 
     all_relevant_tickers = {h.stock_ticker for h, _ in matches}
     for h, _ in matches:
@@ -82,7 +84,7 @@ def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
         try:
             sector = market_data.get_sector(h.stock_ticker)
         except market_data.MarketDataError:
-            sector = "לא ידוע"
+            sector = "Unknown"
         try:
             summary = market_data.get_business_summary(h.stock_ticker)
         except market_data.MarketDataError:
@@ -95,23 +97,23 @@ def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
         ]
         other_holders = sorted(holders_by_stock[h.stock_ticker] - {h.fund_name})
 
-        quarter_label = f"{portfolio_date.year} Q{(portfolio_date.month - 1)//3 + 1}" if portfolio_date else "לא ידוע"
+        quarter_label = f"{portfolio_date.year} Q{(portfolio_date.month - 1)//3 + 1}" if portfolio_date else "Unknown"
 
         links = market_data.ir_links(h.stock_ticker, h.stock_name)
 
         rows.append(
             {
-                "חברה": f"{h.stock_ticker} - {h.stock_name}",
-                "קרן": h.fund_name,
-                "סיכום": summary,
-                "מקורות": "; ".join(f"{k}: {v}" for k, v in links.items()),
-                "השערה": narrative.fund_hypothesis(
+                "Company": f"{h.stock_ticker} - {h.stock_name}",
+                "Fund": h.fund_name,
+                "Summary": summary,
+                "Sources": "; ".join(f"{k}: {v}" for k, v in links.items()),
+                "Hypothesis": narrative.fund_hypothesis(
                     h.fund_name, h.stock_name, h.activity_pct, drop_pct, quarter_label
                 ),
-                "חברות דומות (אותה קרן)": ", ".join(similar[:5]) if similar else "-",
-                "קרנות נוספות שמחזיקות": ", ".join(other_holders) if other_holders else "-",
-                "% ירידת מחיר": round(drop_pct, 1),
-                "% הגדלת אחזקה": round(h.activity_pct, 1),
+                "Similar companies (same fund)": ", ".join(similar[:5]) if similar else "-",
+                "Other holders": ", ".join(other_holders) if other_holders else "-",
+                "Price drop %": round(drop_pct, 1),
+                "Position increase %": round(h.activity_pct, 1),
             }
         )
 
