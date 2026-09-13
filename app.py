@@ -14,14 +14,13 @@ st.title("כלי מחקר שוק ואיתור רעיונות השקעה")
 tab1, tab2 = st.tabs(["ניתוח קרנות (Funds Analysis)", "ניתוח מאגר Magic Formula"])
 
 
-def _holdings_by_stock() -> dict[str, set[str]]:
+def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     """Build a stock -> {fund names} index from Dataroma, used to cross-reference tab 2."""
     holdings_by_stock: dict[str, set[str]] = defaultdict(set)
     funds = dataroma_client.get_superinvestors()
-    for fund in funds:
-        holdings, _ = dataroma_client.get_holdings(fund["ticker"], fund["name"])
-        for h in holdings:
-            holdings_by_stock[h.stock_ticker].add(h.fund_name)
+    all_holdings, _ = dataroma_client.get_all_holdings(funds, progress_callback=progress_callback)
+    for h in all_holdings:
+        holdings_by_stock[h.stock_ticker].add(h.fund_name)
     return holdings_by_stock
 
 
@@ -38,8 +37,8 @@ with tab1:
         progress = st.progress(0.0, text="מתחיל...")
         status = st.empty()
 
-        def _update(i: int, total: int, name: str):
-            progress.progress(i / total, text=f"({i}/{total}) שולף נתונים: {name}")
+        def _update(i: int, total: int, label: str):
+            progress.progress(i / total, text=f"({i}/{total}) {label}")
 
         try:
             df = funds_analysis.run_funds_analysis(progress_callback=_update)
@@ -66,11 +65,14 @@ with tab2:
     if st.button("עדכן ניתוח Magic Formula", type="primary"):
         progress = st.progress(0.0, text="מתחיל...")
 
+        def _scrape_update(i: int, total: int, name: str):
+            progress.progress(i / total, text=f"({i}/{total}) שולף רשימת קרנות: {name}")
+
         def _update(i: int, total: int, name: str):
             progress.progress(i / total, text=f"({i}/{total}) מעשיר מידע: {name}")
 
         try:
-            holdings_index = _holdings_by_stock()
+            holdings_index = _holdings_by_stock(progress_callback=_scrape_update)
             df = magicformula_analysis.run_magic_formula_analysis(
                 holdings_by_stock=holdings_index, progress_callback=_update
             )

@@ -28,15 +28,12 @@ def _prev_quarter_date(d: dt.date) -> dt.date:
 def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
     funds = dataroma_client.get_superinvestors()
 
-    all_holdings: list[dataroma_client.Holding] = []
-    portfolio_dates: dict[str, dt.date | None] = {}
-
-    for i, fund in enumerate(funds):
+    def _scrape_progress(i, total, name):
         if progress_callback:
-            progress_callback(i + 1, len(funds), fund["name"])
-        holdings, date_str = dataroma_client.get_holdings(fund["ticker"], fund["name"])
-        all_holdings.extend(holdings)
-        portfolio_dates[fund["ticker"]] = _parse_portfolio_date(date_str)
+            progress_callback(i, total, f"שולף נתונים: {name}")
+
+    all_holdings, raw_dates = dataroma_client.get_all_holdings(funds, progress_callback=_scrape_progress)
+    portfolio_dates = {ticker: _parse_portfolio_date(d) for ticker, d in raw_dates.items()}
 
     holders_by_stock: dict[str, set[str]] = defaultdict(set)
     for h in all_holdings:
@@ -46,28 +43,42 @@ def run_funds_analysis(progress_callback=None) -> pd.DataFrame:
     for h in all_holdings:
         holdings_by_fund[h.fund_ticker].append(h)
 
-    rows = []
-    for h in all_holdings:
-        if h.activity_direction != "Add" or h.activity_pct is None or h.reported_price is None:
-            continue
+    add_candidates = [
+        h
+        for h in all_holdings
+        if h.activity_direction == "Add" and h.activity_pct is not None and h.reported_price is not None
+        and portfolio_dates.get(h.fund_ticker)
+    ]
 
-        portfolio_date = portfolio_dates.get(h.fund_ticker)
-        prev_price = None
-        if portfolio_date:
-            try:
-                prev_price = market_data.get_price_on_or_before(
-                    h.stock_ticker, _prev_quarter_date(portfolio_date)
-                )
-            except market_data.MarketDataError:
-                prev_price = None
+    if progress_callback:
+        progress_callback(1, 1, f"בודק מחירים היסטוריים עבור {len(add_candidates)} אחזקות...")
 
+    price_pairs = list(
+        {(h.stock_ticker, _prev_quarter_date(portfolio_dates[h.fund_ticker])) for h in add_candidates}
+    )
+    prev_prices = market_data.get_prices_batch(price_pairs)
+
+    matches = []
+    for h in add_candidates:
+        prev_price = prev_prices.get((h.stock_ticker, _prev_quarter_date(portfolio_dates[h.fund_ticker])))
         if prev_price is None or prev_price <= 0:
             continue
-
         drop_pct = (prev_price - h.reported_price) / prev_price * 100
         if drop_pct < DROP_THRESHOLD_PCT:
             continue
+        matches.append((h, drop_pct))
 
+    if progress_callback:
+        progress_callback(1, 1, f"מעשיר {len(matches)} רעיונות עם מידע חברה...")
+
+    all_relevant_tickers = {h.stock_ticker for h, _ in matches}
+    for h, _ in matches:
+        all_relevant_tickers.update(o.stock_ticker for o in holdings_by_fund[h.fund_ticker])
+    market_data.prefetch_ticker_info(list(all_relevant_tickers))
+
+    rows = []
+    for h, drop_pct in matches:
+        portfolio_date = portfolio_dates.get(h.fund_ticker)
         try:
             sector = market_data.get_sector(h.stock_ticker)
         except market_data.MarketDataError:

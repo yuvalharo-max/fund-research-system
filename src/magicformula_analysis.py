@@ -19,6 +19,8 @@ def run_magic_formula_analysis(
     )
     holdings_by_stock = holdings_by_stock or {}
 
+    market_data.prefetch_ticker_info([r.ticker for r in results])
+
     sector_by_ticker: dict[str, str] = {}
     for r in results:
         try:

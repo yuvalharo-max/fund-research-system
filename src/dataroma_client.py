@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import requests
@@ -146,3 +147,27 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
         raise DataromaError(f"לא נמצאו אחזקות עבור {fund_ticker} — ייתכן שמבנה האתר השתנה.")
 
     return holdings, portfolio_date
+
+
+def get_all_holdings(
+    funds: list[dict], progress_callback=None, max_workers: int = 15
+) -> tuple[list[Holding], dict[str, str | None]]:
+    """Fetch every fund's holdings concurrently (independent HTTP GETs)."""
+    all_holdings: list[Holding] = []
+    portfolio_dates: dict[str, str | None] = {}
+    done = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_holdings, fund["ticker"], fund["name"]): fund for fund in funds
+        }
+        for future in as_completed(futures):
+            fund = futures[future]
+            holdings, date_str = future.result()
+            all_holdings.extend(holdings)
+            portfolio_dates[fund["ticker"]] = date_str
+            done += 1
+            if progress_callback:
+                progress_callback(done, len(funds), fund["name"])
+
+    return all_holdings, portfolio_dates
