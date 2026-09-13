@@ -93,6 +93,13 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
         if match:
             portfolio_date = match.group(1)
 
+    declared_count = None
+    count_label = soup.find(string=re.compile("No\\. of stocks"))
+    if count_label:
+        count_match = re.search(r"No\.\s*of\s*stocks:\s*(\d+)", count_label.parent.get_text())
+        if count_match:
+            declared_count = int(count_match.group(1))
+
     table = soup.find("table", id="grid")
     if table is None:
         raise DataromaError(f"לא נמצאה טבלת אחזקות עבור {fund_ticker} — ייתכן שמבנה האתר השתנה.")
@@ -135,7 +142,7 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
             )
         )
 
-    if not holdings:
+    if not holdings and declared_count != 0:
         raise DataromaError(f"לא נמצאו אחזקות עבור {fund_ticker} — ייתכן שמבנה האתר השתנה.")
 
     return holdings, portfolio_date
