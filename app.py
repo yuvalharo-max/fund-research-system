@@ -98,15 +98,26 @@ def _render_results(
         key=f"{tab_key}_grid",
     )
 
+    # Remember the selected row by its stable key in session_state, not just the
+    # grid's own reported selection — changing Status updates that column's text,
+    # which resets the grid's selection on the next rerun, closing the panel right
+    # when a status button is clicked. Session state survives that.
+    sel_state_key = f"{tab_key}_selected_key"
     selected_rows = event.selection.rows if event and event.selection else []
-    if not selected_rows:
+    if selected_rows:
+        st.session_state[sel_state_key] = filtered.iloc[selected_rows[0]]["_key"]
+
+    selected_key = st.session_state.get(sel_state_key)
+    matches = filtered[filtered["_key"] == selected_key] if selected_key else filtered.iloc[0:0]
+    if matches.empty:
+        st.session_state[sel_state_key] = None
         st.caption(
             "Click the checkbox on the left of a row above to see its full detail "
             "and mark it read, starred, or archived."
         )
         return
 
-    row = filtered.iloc[selected_rows[0]]
+    row = matches.iloc[0]
     row_key = row["_key"]
     current_status = row["_status"]
 
