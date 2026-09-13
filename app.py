@@ -11,12 +11,12 @@ load_dotenv()
 st.set_page_config(page_title="Market Research Tool", layout="wide")
 st.title("Market Research & Investment Idea Finder")
 
-tab1, tab2 = st.tabs(["Funds Analysis", "Magic Formula Analysis"])
-
 LINK_COLUMN_CONFIG = {
-    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
-    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗"),
+    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗", width="small"),
+    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
 }
+
+TAB_LABELS = {"funds": "Funds Analysis", "magicformula": "Magic Formula Analysis"}
 
 
 def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
@@ -29,15 +29,51 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     return holdings_by_stock
 
 
-def _render_results(df, csv_name: str):
+def _render_results(df, csv_name: str, compact_cols: list[str], detail_cols: list[str], key: str):
+    """Show a compact, scannable table; clicking a row reveals the long-text detail below it."""
     if df.empty:
         st.info("No results to show.")
+        return
+
+    event = st.dataframe(
+        df[compact_cols],
+        width="stretch",
+        column_config=LINK_COLUMN_CONFIG,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
+    )
+    st.download_button(
+        "Export full detail to CSV", df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv"
+    )
+
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        row = df.iloc[selected_rows[0]]
+        with st.container(border=True):
+            st.markdown(f"#### {row['Company']}")
+            for col in detail_cols:
+                if col in row and str(row[col]) not in ("", "nan", "-"):
+                    st.markdown(f"**{col}:** {row[col]}")
     else:
-        st.dataframe(df, use_container_width=True, column_config=LINK_COLUMN_CONFIG)
-        st.download_button("Export to CSV", df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv")
+        st.caption("Click a row above to see its full summary, hypothesis, and related companies/funds.")
 
 
-with tab1:
+params = st.query_params
+active_tab = params.get("tab", "funds")
+if active_tab not in TAB_LABELS:
+    active_tab = "funds"
+
+selected_tab = st.segmented_control(
+    "View", options=list(TAB_LABELS.keys()), format_func=lambda k: TAB_LABELS[k], default=active_tab
+)
+if selected_tab is None:
+    selected_tab = active_tab
+st.query_params["tab"] = selected_tab
+
+st.divider()
+
+if selected_tab == "funds":
     st.write(
         "Finds stocks where a fund on the list **increased its position** last quarter, "
         "while the reported price **dropped 10% or more** versus the prior quarter."
@@ -47,6 +83,9 @@ with tab1:
         fund_limit = st.number_input(
             "Limit to first N funds (0 = all 83 funds)", min_value=0, value=0, step=5
         )
+
+    compact_cols = ["Company", "Fund", "Price drop %", "Position increase %", "Yahoo Finance", "IR Search"]
+    detail_cols = ["Summary", "Hypothesis", "Similar companies (same fund)", "Other holders"]
 
     ran_now = False
     if st.button("Run Funds Analysis", type="primary"):
@@ -65,7 +104,7 @@ with tab1:
             progress.empty()
             timestamp = cache.save_run("funds", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "funds_analysis.csv")
+            _render_results(df, "funds_analysis.csv", compact_cols, detail_cols, key="funds_table")
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("funds")
@@ -73,12 +112,15 @@ with tab1:
             st.caption(f"Last updated: {last_run}")
             cached_df = cache.load_latest_run("funds")
             if cached_df is not None:
-                _render_results(cached_df, "funds_analysis.csv")
+                _render_results(cached_df, "funds_analysis.csv", compact_cols, detail_cols, key="funds_table")
         else:
             st.info("No run yet — click \"Run Funds Analysis\" above to get started.")
 
-with tab2:
+else:
     st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
+
+    compact_cols = ["Company", "Market cap ($M)", "Yahoo Finance", "IR Search"]
+    detail_cols = ["Summary", "Hypothesis", "Similar companies (screener)", "Funds holding it"]
 
     ran_now = False
     if st.button("Update Magic Formula Analysis", type="primary"):
@@ -103,7 +145,7 @@ with tab2:
             progress.empty()
             timestamp = cache.save_run("magicformula", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "magic_formula_analysis.csv")
+            _render_results(df, "magic_formula_analysis.csv", compact_cols, detail_cols, key="mf_table")
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("magicformula")
@@ -111,6 +153,6 @@ with tab2:
             st.caption(f"Last updated: {last_run}")
             cached_df = cache.load_latest_run("magicformula")
             if cached_df is not None:
-                _render_results(cached_df, "magic_formula_analysis.csv")
+                _render_results(cached_df, "magic_formula_analysis.csv", compact_cols, detail_cols, key="mf_table")
         else:
             st.info("No run yet — click \"Update Magic Formula Analysis\" above to get started.")
