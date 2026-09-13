@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 
 import requests
@@ -85,9 +86,7 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
     soup = BeautifulSoup(page.text, "lxml")
     form = None
     for candidate in soup.find_all("form"):
-        if candidate.find("input", {"name": re.compile("marketcap", re.I)}) or candidate.find(
-            "input", {"name": re.compile("radiobutton", re.I)}
-        ):
+        if candidate.find("input", {"name": re.compile("marketcap", re.I)}):
             form = candidate
             break
     if form is None:
@@ -99,13 +98,23 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
     action_url = action if action.startswith("http") else f"{BASE_URL}{action}"
 
     payload: dict[str, str] = {}
+    radio_groups: dict[str, list] = defaultdict(list)
     for inp in form.find_all("input"):
         name = inp.get("name")
         if not name:
             continue
-        if inp.get("type") == "checkbox" and not inp.get("checked"):
+        input_type = inp.get("type")
+        if input_type == "checkbox" and not inp.has_attr("checked"):
+            continue
+        if input_type == "radio":
+            radio_groups[name].append(inp)
             continue
         payload[name] = inp.get("value", "")
+
+    for name, options in radio_groups.items():
+        checked = next((o for o in options if o.has_attr("checked")), options[0] if options else None)
+        if checked is not None:
+            payload[name] = checked.get("value", "")
 
     market_cap_field = next((n for n in payload if re.search("marketcap", n, re.I) and "txt" not in n.lower()), None)
     if market_cap_field is None:
@@ -113,9 +122,12 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
     if market_cap_field:
         payload[market_cap_field] = str(min_market_cap_million)
 
-    stocks_field = next((n for n in payload if re.search("radiobutton|numberofstocks|numstocks", n, re.I)), None)
-    if stocks_field:
-        payload[stocks_field] = str(number_of_stocks)
+    # The 30/50-stocks control is a true/false radio group (e.g. "Select30"):
+    # true selects the 30-stock view, false selects 50.
+    for name, options in radio_groups.items():
+        values = {o.get("value", "").lower() for o in options}
+        if values == {"true", "false"} and name != market_cap_field:
+            payload[name] = "true" if number_of_stocks <= 30 else "false"
 
     try:
         result_resp = session.post(action_url, data=payload, headers=HEADERS, timeout=TIMEOUT)
@@ -128,33 +140,30 @@ def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks:
 
 def _parse_results(html: str) -> list[ScreenerResult]:
     soup = BeautifulSoup(html, "lxml")
-    table = soup.find("table", id=re.compile("grid|result|screen", re.I)) or soup.find("table")
+    table = soup.find("table", class_=re.compile("screeningdata", re.I))
+    if table is None:
+        # Fall back to any table whose header row mentions "Ticker".
+        table = next(
+            (t for t in soup.find_all("table") if "ticker" in t.get_text()[:200].lower()), None
+        )
     if table is None:
         raise MagicFormulaError("No results table found on the screener page — the site structure may have changed.")
 
+    rows = table.find_all("tr")
     results: list[ScreenerResult] = []
-    for tr in table.select("tbody tr") or table.find_all("tr")[1:]:
+    for rank, tr in enumerate(rows[1:], start=1):  # skip the header row
         cells = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(cells) < 2:
+        if len(cells) < 3:
             continue
-        ticker_match = re.match(r"([A-Za-z0-9.]+)\s*-?\s*(.*)", cells[1] if len(cells) > 2 else cells[0])
-        if not ticker_match:
+        name, ticker, market_cap_raw = cells[0], cells[1], cells[2]
+        if not ticker:
             continue
-        ticker, name = ticker_match.group(1), (ticker_match.group(2) or cells[0])
-        rank = None
-        try:
-            rank = int(cells[0])
-        except (ValueError, IndexError):
-            pass
         market_cap = None
-        for cell in cells:
-            cap_match = re.match(r"\$?([\d,]+\.?\d*)$", cell.replace(",", ""))
-            if cap_match:
-                try:
-                    market_cap = float(cap_match.group(1))
-                except ValueError:
-                    pass
-        results.append(ScreenerResult(ticker=ticker, name=name.strip(), market_cap_million=market_cap, rank=rank))
+        try:
+            market_cap = float(market_cap_raw.replace(",", "").replace("$", ""))
+        except ValueError:
+            pass
+        results.append(ScreenerResult(ticker=ticker, name=name, market_cap_million=market_cap, rank=rank))
 
     if not results:
         raise MagicFormulaError(
