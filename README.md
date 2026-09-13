@@ -20,6 +20,21 @@ streamlit run app.py
 
 `.env` לא נכנס ל-git — הפרטים שלך נשארים מקומיים בלבד.
 
+## הרצה בלחיצה כפולה (מומלץ)
+
+יש `launch.sh` בשורש הפרויקט שמפעיל את השרת (אם הוא לא רץ) ופותח את הכלי בדפדפן ברירת המחדל. אפשר להריץ אותו ישירות (`./launch.sh`), אבל הכי נוח: לעטוף אותו באפליקציית macOS קטנה על שולחן העבודה:
+
+```bash
+cat > /tmp/launcher.applescript <<'EOF'
+do shell script "/path/to/fund-research-system/launch.sh"
+EOF
+osacompile -o ~/Desktop/"Fund Research Tool.app" /tmp/launcher.applescript
+```
+
+(יש כזו כבר על שולחן העבודה של Noy — `Fund Research Tool.app`. היא ספציפית למחשב הזה כי היא לא חלק מה-git repo; במחשב אחר צריך ליצור אותה מחדש עם השלבים שלמעלה, עם הנתיב המקומי הנכון.)
+
+בפעם הראשונה שלוחצים על האפליקציה, macOS עשוי להציג אזהרת "מפתח לא מזוהה" — קליק ימני → Open פותר את זה חד-פעמית.
+
 ## ריצה ממחשב אחר
 
 ```bash

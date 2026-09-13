@@ -36,3 +36,17 @@ def list_runs(tab_key: str) -> list[str]:
 
 def load_run(tab_key: str, run_name: str) -> pd.DataFrame:
     return pd.read_csv(DATA_DIR / f"{run_name}.csv")
+
+
+def load_latest_run(tab_key: str) -> pd.DataFrame | None:
+    """Load the most recent saved run's DataFrame, or None if no run has ever completed."""
+    meta_path = DATA_DIR / f"{tab_key}_latest.json"
+    if not meta_path.exists():
+        return None
+    csv_name = json.loads(meta_path.read_text()).get("csv")
+    if not csv_name:
+        return None
+    csv_path = DATA_DIR / csv_name
+    if not csv_path.exists():
+        return None
+    return pd.read_csv(csv_path)
