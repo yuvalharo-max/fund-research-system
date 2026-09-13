@@ -21,12 +21,8 @@ STATUS_FILTER_OPTIONS = [
     "Everything",
 ]
 
-STATUS_OPTION_LABELS = list(status_store.STATUS_LABELS.values())
-LABEL_TO_STATUS = {v: k for k, v in status_store.STATUS_LABELS.items()}
-
 COLUMN_CONFIG = {
     "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
-    "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTION_LABELS, width="small"),
 }
 
 
@@ -92,39 +88,59 @@ def _render_results(
 
     filtered["Status"] = filtered["_status"].apply(lambda s: status_store.STATUS_LABELS[s])
     filtered = filtered.reset_index(drop=True)
-    row_keys = filtered["_key"]
 
-    edited = st.data_editor(
+    event = st.dataframe(
         filtered[["Status"] + compact_cols],
         width="stretch",
         column_config=COLUMN_CONFIG,
-        disabled=compact_cols,
-        hide_index=True,
-        key=f"{tab_key}_editor",
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"{tab_key}_grid",
     )
 
-    changed = False
-    for i in range(len(edited)):
-        new_status = LABEL_TO_STATUS[edited.loc[i, "Status"]]
-        rk = row_keys.iloc[i]
-        if status_store.get_status(status, rk) != new_status:
-            status_store.set_status(tab_key, status, rk, new_status)
-            changed = True
-    if changed:
-        st.rerun()
+    selected_rows = event.selection.rows if event and event.selection else []
+    if not selected_rows:
+        st.caption(
+            "Click the checkbox on the left of a row above to see its full detail "
+            "and mark it read, starred, or archived."
+        )
+        return
 
-    if has_fund:
-        detail_labels = [f"{row['Company']} ({row['Fund']})" for _, row in filtered.iterrows()]
-    else:
-        detail_labels = filtered["Company"].tolist()
-    chosen = st.selectbox("View full detail for", ["—"] + detail_labels, key=f"{tab_key}_detail_pick")
-    if chosen != "—":
-        row = filtered.iloc[detail_labels.index(chosen)]
-        with st.container(border=True):
-            st.markdown(f"#### {row['Company']}")
-            for col in detail_cols:
-                if col in row and str(row[col]) not in ("", "nan", "-"):
-                    st.markdown(f"**{col}:** {row[col]}")
+    row = filtered.iloc[selected_rows[0]]
+    row_key = row["_key"]
+    current_status = row["_status"]
+
+    with st.container(border=True):
+        st.markdown(f"#### {row['Company']}")
+        for col in detail_cols:
+            if col in row and str(row[col]) not in ("", "nan", "-"):
+                st.markdown(f"**{col}:** {row[col]}")
+
+        action_cols = st.columns(4)
+        with action_cols[0]:
+            new_read = st.checkbox(
+                "Read", value=current_status == status_store.STATUS_READ, key=f"{tab_key}_read_{row_key}"
+            )
+            if new_read and current_status == status_store.STATUS_UNREAD:
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_READ)
+                st.rerun()
+            elif not new_read and current_status == status_store.STATUS_READ:
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
+                st.rerun()
+        with action_cols[1]:
+            if st.button("⭐ Follow up later", key=f"{tab_key}_star_{row_key}"):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_STARRED)
+                st.rerun()
+        with action_cols[2]:
+            if st.button("🗑 Not relevant", key=f"{tab_key}_arch_{row_key}"):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_ARCHIVED)
+                st.rerun()
+        with action_cols[3]:
+            if current_status != status_store.STATUS_UNREAD and st.button(
+                "Clear flag", key=f"{tab_key}_clear_{row_key}"
+            ):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
+                st.rerun()
 
 
 params = st.query_params
