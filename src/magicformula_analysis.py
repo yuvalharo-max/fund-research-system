@@ -1,7 +1,5 @@
-"""Tab 2 logic: Magic Formula screener results enriched with sector/fund cross-referencing."""
+"""Tab 2 logic: Magic Formula screener results enriched with fund cross-referencing."""
 from __future__ import annotations
-
-from collections import defaultdict
 
 import pandas as pd
 
@@ -21,17 +19,6 @@ def run_magic_formula_analysis(
 
     market_data.prefetch_ticker_info([r.ticker for r in results])
 
-    sector_by_ticker: dict[str, str] = {}
-    for r in results:
-        try:
-            sector_by_ticker[r.ticker] = market_data.get_sector(r.ticker)
-        except market_data.MarketDataError:
-            sector_by_ticker[r.ticker] = "Unknown"
-
-    by_sector: dict[str, list[str]] = defaultdict(list)
-    for r in results:
-        by_sector[sector_by_ticker[r.ticker]].append(r.name)
-
     rows = []
     for i, r in enumerate(results):
         if progress_callback:
@@ -42,8 +29,6 @@ def run_magic_formula_analysis(
         except market_data.MarketDataError:
             summary = narrative.business_summary_fallback(r.name)
 
-        sector = sector_by_ticker[r.ticker]
-        similar = [name for name in by_sector[sector] if name != r.name]
         fund_holders = sorted(holdings_by_stock.get(r.ticker, set()))
         links = market_data.ir_links(r.ticker, r.name)
 
@@ -51,12 +36,10 @@ def run_magic_formula_analysis(
             {
                 "Company": f"{r.ticker} - {r.name}",
                 "Summary": summary,
-                "Yahoo Finance": links.get("Yahoo Finance"),
-                "IR Search": links.get("IR Search"),
-                "Hypothesis": narrative.magic_formula_hypothesis(r.name, None, None),
-                "Similar companies (screener)": ", ".join(similar[:5]) if similar else "-",
                 "Funds holding it": ", ".join(fund_holders) if fund_holders else "-",
                 "Market cap ($M)": r.market_cap_million,
+                "Yahoo Finance": links.get("Yahoo Finance"),
+                "IR Search": links.get("IR Search"),
                 "_fund_holder_count": len(fund_holders),
             }
         )

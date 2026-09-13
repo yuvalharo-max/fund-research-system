@@ -1,4 +1,4 @@
-"""Wrapper around yfinance for prices, market cap, sector and business summaries."""
+"""Wrapper around yfinance for historical prices and business summaries."""
 from __future__ import annotations
 
 import datetime as dt
@@ -21,16 +21,6 @@ def get_ticker_info(ticker: str) -> dict:
     if not info:
         raise MarketDataError(f"No info found for {ticker}")
     return info
-
-
-def get_sector(ticker: str) -> str:
-    info = get_ticker_info(ticker)
-    return info.get("sector") or "Unknown"
-
-
-def get_market_cap(ticker: str) -> float | None:
-    info = get_ticker_info(ticker)
-    return info.get("marketCap")
 
 
 def get_business_summary(ticker: str, max_sentences: int = 3) -> str:

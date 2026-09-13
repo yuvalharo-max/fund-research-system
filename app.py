@@ -21,6 +21,15 @@ STATUS_FILTER_OPTIONS = [
     "Everything",
 ]
 
+STATUS_OPTION_LABELS = list(status_store.STATUS_LABELS.values())
+LABEL_TO_STATUS = {v: k for k, v in status_store.STATUS_LABELS.items()}
+
+LINK_COLUMN_CONFIG = {
+    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗", width="small"),
+    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
+    "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPTION_LABELS, width="small"),
+}
+
 
 def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     """Build a stock -> {fund names} index from Dataroma, used to cross-reference tab 2."""
@@ -32,19 +41,8 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     return holdings_by_stock
 
 
-def _row_summary_label(row, has_fund: bool) -> str:
-    if has_fund:
-        return (
-            f"{row['Company']}   ·   {row['Fund']}   ·   "
-            f"Drop {row['Price drop %']}%  /  Add {row['Position increase %']}%"
-        )
-    cap = row["Market cap ($M)"]
-    cap_text = f"${cap:,.0f}M" if cap == cap else "n/a"  # NaN check
-    return f"{row['Company']}   ·   Market cap {cap_text}"
-
-
-def _render_results(df, csv_name: str, detail_cols: list[str], tab_key: str, has_fund: bool):
-    """Filters + a clickable row list: click a row to expand its detail, or set its status inline."""
+def _render_results(df, csv_name: str, display_cols: list[str], tab_key: str, has_fund: bool):
+    """Filters + an editable grid: change the Status cell inline to mark read/starred/archived."""
     if df.empty:
         st.info("No results to show.")
         return
@@ -91,48 +89,28 @@ def _render_results(df, csv_name: str, detail_cols: list[str], tab_key: str, has
         st.info("No rows match the current filters.")
         return
 
-    for _, row in filtered.iterrows():
-        row_key = row["_key"]
-        current_status = row["_status"]
-        expand_flag = f"{tab_key}_expanded_{row_key}"
-        if expand_flag not in st.session_state:
-            st.session_state[expand_flag] = False
+    filtered["Status"] = filtered["_status"].apply(lambda s: status_store.STATUS_LABELS[s])
+    row_keys = filtered["_key"].reset_index(drop=True)
+    grid_df = filtered[["Status"] + display_cols].reset_index(drop=True)
 
-        col_status, col_main, col_link1, col_link2 = st.columns([1.6, 5, 0.7, 0.7])
+    edited = st.data_editor(
+        grid_df,
+        width="stretch",
+        column_config=LINK_COLUMN_CONFIG,
+        disabled=display_cols,
+        hide_index=True,
+        key=f"{tab_key}_editor",
+    )
 
-        with col_status:
-            new_status = st.selectbox(
-                "Status",
-                status_store.STATUS_OPTIONS,
-                index=status_store.STATUS_OPTIONS.index(current_status),
-                format_func=lambda s: status_store.STATUS_LABELS[s],
-                key=f"{tab_key}_statussel_{row_key}",
-                label_visibility="collapsed",
-            )
-            if new_status != current_status:
-                status_store.set_status(tab_key, status, row_key, new_status)
-                st.rerun()
-
-        with col_main:
-            if st.button(
-                _row_summary_label(row, has_fund),
-                key=f"{tab_key}_toggle_{row_key}",
-                use_container_width=True,
-            ):
-                st.session_state[expand_flag] = not st.session_state[expand_flag]
-
-        with col_link1:
-            st.link_button("Open ↗", row["Yahoo Finance"], use_container_width=True)
-        with col_link2:
-            st.link_button("Search ↗", row["IR Search"], use_container_width=True)
-
-        if st.session_state[expand_flag]:
-            with st.container(border=True):
-                for col in detail_cols:
-                    if col in row and str(row[col]) not in ("", "nan", "-"):
-                        st.markdown(f"**{col}:** {row[col]}")
-
-        st.divider()
+    changed = False
+    for i in range(len(edited)):
+        new_status = LABEL_TO_STATUS[edited.loc[i, "Status"]]
+        rk = row_keys.iloc[i]
+        if status_store.get_status(status, rk) != new_status:
+            status_store.set_status(tab_key, status, rk, new_status)
+            changed = True
+    if changed:
+        st.rerun()
 
 
 params = st.query_params
@@ -152,15 +130,26 @@ st.divider()
 if selected_tab == "funds":
     st.write(
         "Finds stocks where a fund on the list **increased its position** last quarter, "
-        "while the reported price **dropped 10% or more** versus the prior quarter."
+        "while the reported price **dropped** versus the prior quarter."
     )
+    st.caption("Data source: [Dataroma](https://www.dataroma.com)")
 
-    with st.expander("Quick test (optional)"):
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        min_drop_pct = st.number_input(
+            "Minimum price drop % (vs prior quarter)", min_value=0.0, value=10.0, step=1.0
+        )
+    with col_b:
+        min_add_pct = st.number_input("Minimum position increase %", min_value=0.0, value=0.0, step=1.0)
+    with col_c:
         fund_limit = st.number_input(
-            "Limit to first N funds (0 = all 83 funds)", min_value=0, value=0, step=5
+            "Quick test: limit to first N funds (0 = all 83)", min_value=0, value=0, step=5
         )
 
-    detail_cols = ["Summary", "Hypothesis", "Similar companies (same fund)", "Other holders"]
+    display_cols = [
+        "Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %",
+        "Summary", "Other holders", "Yahoo Finance", "IR Search",
+    ]
 
     ran_now = False
     if st.button("Run Funds Analysis", type="primary"):
@@ -171,7 +160,12 @@ if selected_tab == "funds":
             progress.progress(i / total, text=f"({i}/{total}) {label}")
 
         try:
-            df = funds_analysis.run_funds_analysis(progress_callback=_update, fund_limit=fund_limit or None)
+            df = funds_analysis.run_funds_analysis(
+                progress_callback=_update,
+                fund_limit=fund_limit or None,
+                min_drop_pct=min_drop_pct,
+                min_add_pct=min_add_pct,
+            )
         except (dataroma_client.DataromaError,) as exc:
             st.error(f"Run failed: {exc}")
             ran_now = False
@@ -179,7 +173,7 @@ if selected_tab == "funds":
             progress.empty()
             timestamp = cache.save_run("funds", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "funds_analysis.csv", detail_cols, tab_key="funds", has_fund=True)
+            _render_results(df, "funds_analysis.csv", display_cols, tab_key="funds", has_fund=True)
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("funds")
@@ -187,14 +181,15 @@ if selected_tab == "funds":
             st.caption(f"Last updated: {last_run}")
             cached_df = cache.load_latest_run("funds")
             if cached_df is not None:
-                _render_results(cached_df, "funds_analysis.csv", detail_cols, tab_key="funds", has_fund=True)
+                _render_results(cached_df, "funds_analysis.csv", display_cols, tab_key="funds", has_fund=True)
         else:
             st.info("No run yet — click \"Run Funds Analysis\" above to get started.")
 
 else:
     st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
+    st.caption("Data source: [Magic Formula Investing](https://www.magicformulainvesting.com)")
 
-    detail_cols = ["Summary", "Hypothesis", "Similar companies (screener)", "Funds holding it"]
+    display_cols = ["Company", "Summary", "Funds holding it", "Market cap ($M)", "Yahoo Finance", "IR Search"]
 
     ran_now = False
     if st.button("Update Magic Formula Analysis", type="primary"):
@@ -219,7 +214,7 @@ else:
             progress.empty()
             timestamp = cache.save_run("magicformula", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "magic_formula_analysis.csv", detail_cols, tab_key="magicformula", has_fund=False)
+            _render_results(df, "magic_formula_analysis.csv", display_cols, tab_key="magicformula", has_fund=False)
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("magicformula")
@@ -228,7 +223,7 @@ else:
             cached_df = cache.load_latest_run("magicformula")
             if cached_df is not None:
                 _render_results(
-                    cached_df, "magic_formula_analysis.csv", detail_cols, tab_key="magicformula", has_fund=False
+                    cached_df, "magic_formula_analysis.csv", display_cols, tab_key="magicformula", has_fund=False
                 )
         else:
             st.info("No run yet — click \"Update Magic Formula Analysis\" above to get started.")
