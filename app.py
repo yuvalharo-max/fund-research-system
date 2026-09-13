@@ -22,7 +22,6 @@ STATUS_FILTER_OPTIONS = [
 ]
 
 LINK_COLUMN_CONFIG = {
-    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗", width="small"),
     "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
 }
 
@@ -177,7 +176,7 @@ if selected_tab == "funds":
             "Quick test: limit to first N funds (0 = all 83)", min_value=0, value=0, step=5
         )
 
-    compact_cols = ["Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "Yahoo Finance", "IR Search"]
+    compact_cols = ["Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "IR Search"]
     detail_cols = ["Summary", "Other holders"]
 
     ran_now = False
@@ -218,7 +217,7 @@ else:
     st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
     st.caption("Data source: [Magic Formula Investing](https://www.magicformulainvesting.com)")
 
-    compact_cols = ["Company", "Market cap ($M)", "Yahoo Finance", "IR Search"]
+    compact_cols = ["Company", "Market cap ($M)", "IR Search"]
     detail_cols = ["Summary", "Funds holding it"]
 
     ran_now = False
@@ -229,8 +228,8 @@ else:
         def _scrape_update(i: int, total: int, name: str):
             progress.progress(i / total, text=f"({i}/{total}) Fetching fund list: {name}")
 
-        def _update(i: int, total: int, name: str):
-            progress.progress(i / total, text=f"({i}/{total}) Enriching data: {name}")
+        def _update(i: int, total: int, label: str):
+            progress.progress(i / total, text=f"({i}/{total}) {label}")
 
         try:
             holdings_index = _holdings_by_stock(progress_callback=_scrape_update)

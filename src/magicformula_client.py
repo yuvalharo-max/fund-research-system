@@ -76,7 +76,25 @@ def _session_login() -> requests.Session:
 
 def get_screener_results(min_market_cap_million: float = 1000, number_of_stocks: int = 50) -> list[ScreenerResult]:
     session = _session_login()
+    return _submit_screener(session, min_market_cap_million, number_of_stocks)
 
+
+def get_multi_threshold_results(
+    thresholds_million: list[float], number_of_stocks: int = 50, progress_callback=None
+) -> dict[float, list[ScreenerResult]]:
+    """Run the screener once per market-cap threshold, reusing one login session."""
+    session = _session_login()
+    results_by_threshold: dict[float, list[ScreenerResult]] = {}
+    for i, threshold in enumerate(thresholds_million):
+        if progress_callback:
+            progress_callback(i + 1, len(thresholds_million), f"${threshold:,.0f}M minimum market cap")
+        results_by_threshold[threshold] = _submit_screener(session, threshold, number_of_stocks)
+    return results_by_threshold
+
+
+def _submit_screener(
+    session: requests.Session, min_market_cap_million: float, number_of_stocks: int
+) -> list[ScreenerResult]:
     try:
         page = session.get(f"{BASE_URL}/Screening/StockScreening", headers=HEADERS, timeout=TIMEOUT)
         page.raise_for_status()

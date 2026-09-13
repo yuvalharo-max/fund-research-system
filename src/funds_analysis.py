@@ -84,7 +84,6 @@ def run_funds_analysis(
             summary = narrative.business_summary_fallback(h.stock_name)
 
         other_holders = sorted(holders_by_stock[h.stock_ticker] - {h.fund_name})
-        links = market_data.ir_links(h.stock_ticker, h.stock_name)
 
         rows.append(
             {
@@ -95,17 +94,18 @@ def run_funds_analysis(
                 "Position increase %": round(h.activity_pct, 1),
                 "Summary": summary,
                 "Other holders": ", ".join(other_holders) if other_holders else "-",
-                "Yahoo Finance": links.get("Yahoo Finance"),
-                "IR Search": links.get("IR Search"),
+                "IR Search": market_data.ir_search_link(h.stock_name),
             }
         )
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        # Rank-based combined score so the top rows are strong in BOTH dimensions
-        # (biggest price drop AND biggest position increase), not just one.
+        # Rank-based combined score so the top rows are strong across all three
+        # dimensions (biggest portfolio weight, biggest price drop, biggest add),
+        # not just one.
+        portfolio_rank = df["% of Portfolio"].rank(ascending=False, method="min")
         drop_rank = df["Price drop %"].rank(ascending=False, method="min")
         add_rank = df["Position increase %"].rank(ascending=False, method="min")
-        df["_combined_rank"] = drop_rank + add_rank
+        df["_combined_rank"] = portfolio_rank + drop_rank + add_rank
         df = df.sort_values("_combined_rank").drop(columns="_combined_rank").reset_index(drop=True)
     return df

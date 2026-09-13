@@ -82,9 +82,6 @@ def prefetch_ticker_info(tickers: list[str], max_workers: int = 4) -> None:
         list(executor.map(_one, unique))
 
 
-def ir_links(ticker: str, company_name: str) -> dict[str, str]:
+def ir_search_link(company_name: str) -> str:
     query = f"{company_name} investor relations".replace(" ", "+")
-    return {
-        "Yahoo Finance": f"https://finance.yahoo.com/quote/{ticker}",
-        "IR Search": f"https://www.google.com/search?q={query}",
-    }
+    return f"https://www.google.com/search?q={query}"
