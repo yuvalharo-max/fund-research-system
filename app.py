@@ -13,6 +13,11 @@ st.title("Market Research & Investment Idea Finder")
 
 tab1, tab2 = st.tabs(["Funds Analysis", "Magic Formula Analysis"])
 
+LINK_COLUMN_CONFIG = {
+    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗"),
+    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗"),
+}
+
 
 def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     """Build a stock -> {fund names} index from Dataroma, used to cross-reference tab 2."""
@@ -54,7 +59,7 @@ with tab1:
             if df.empty:
                 st.info("No stocks matched both conditions in this run.")
             else:
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, use_container_width=True, column_config=LINK_COLUMN_CONFIG)
                 st.download_button(
                     "Export to CSV", df.to_csv(index=False).encode("utf-8-sig"), "funds_analysis.csv", "text/csv"
                 )
@@ -88,7 +93,7 @@ with tab2:
             if df.empty:
                 st.info("No results found in this run.")
             else:
-                st.dataframe(df, use_container_width=True)
+                st.dataframe(df, use_container_width=True, column_config=LINK_COLUMN_CONFIG)
                 st.download_button(
                     "Export to CSV",
                     df.to_csv(index=False).encode("utf-8-sig"),

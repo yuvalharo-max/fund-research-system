@@ -96,5 +96,5 @@ def ir_links(ticker: str, company_name: str) -> dict[str, str]:
     query = f"{company_name} investor relations".replace(" ", "+")
     return {
         "Yahoo Finance": f"https://finance.yahoo.com/quote/{ticker}",
-        "IR Search (Google)": f"https://www.google.com/search?q={query}",
+        "IR Search": f"https://www.google.com/search?q={query}",
     }

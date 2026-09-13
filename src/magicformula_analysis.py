@@ -51,12 +51,21 @@ def run_magic_formula_analysis(
             {
                 "Company": f"{r.ticker} - {r.name}",
                 "Summary": summary,
-                "Sources": "; ".join(f"{k}: {v}" for k, v in links.items()),
+                "Yahoo Finance": links.get("Yahoo Finance"),
+                "IR Search": links.get("IR Search"),
                 "Hypothesis": narrative.magic_formula_hypothesis(r.name, None, None),
                 "Similar companies (screener)": ", ".join(similar[:5]) if similar else "-",
                 "Funds holding it": ", ".join(fund_holders) if fund_holders else "-",
                 "Market cap ($M)": r.market_cap_million,
+                "_fund_holder_count": len(fund_holders),
             }
         )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        # Surface companies your own funds already hold first (strongest cross-signal),
+        # then bigger/safer companies within that.
+        df = df.sort_values(
+            ["_fund_holder_count", "Market cap ($M)"], ascending=[False, False]
+        ).drop(columns="_fund_holder_count").reset_index(drop=True)
+    return df

@@ -106,7 +106,8 @@ def run_funds_analysis(progress_callback=None, fund_limit: int | None = None) ->
                 "Company": f"{h.stock_ticker} - {h.stock_name}",
                 "Fund": h.fund_name,
                 "Summary": summary,
-                "Sources": "; ".join(f"{k}: {v}" for k, v in links.items()),
+                "Yahoo Finance": links.get("Yahoo Finance"),
+                "IR Search": links.get("IR Search"),
                 "Hypothesis": narrative.fund_hypothesis(
                     h.fund_name, h.stock_name, h.activity_pct, drop_pct, quarter_label
                 ),
@@ -117,7 +118,10 @@ def run_funds_analysis(progress_callback=None, fund_limit: int | None = None) ->
             }
         )
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Price drop %", ascending=False).reset_index(drop=True)
+    return df
 
 
 def _same_sector(ticker: str, sector: str) -> bool:
