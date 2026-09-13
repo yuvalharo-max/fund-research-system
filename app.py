@@ -11,11 +11,6 @@ load_dotenv()
 st.set_page_config(page_title="Market Research Tool", layout="wide")
 st.title("Market Research & Investment Idea Finder")
 
-LINK_COLUMN_CONFIG = {
-    "Yahoo Finance": st.column_config.LinkColumn("Yahoo Finance", display_text="Open ↗", width="small"),
-    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
-}
-
 TAB_LABELS = {"funds": "Funds Analysis", "magicformula": "Magic Formula Analysis"}
 
 STATUS_FILTER_OPTIONS = [
@@ -37,35 +32,37 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     return holdings_by_stock
 
 
-def _status_icon(item: dict) -> str:
-    icon = "✓ " if item.get("read") else ""
-    if item.get("priority") == status_store.PRIORITY_STARRED:
-        icon += "⭐"
-    elif item.get("priority") == status_store.PRIORITY_ARCHIVED:
-        icon += "🗑"
-    return icon.strip() or "—"
+def _row_summary_label(row, has_fund: bool) -> str:
+    if has_fund:
+        return (
+            f"{row['Company']}   ·   {row['Fund']}   ·   "
+            f"Drop {row['Price drop %']}%  /  Add {row['Position increase %']}%"
+        )
+    cap = row["Market cap ($M)"]
+    cap_text = f"${cap:,.0f}M" if cap == cap else "n/a"  # NaN check
+    return f"{row['Company']}   ·   Market cap {cap_text}"
 
 
-def _render_results(df, csv_name: str, compact_cols: list[str], detail_cols: list[str], key: str, has_fund: bool):
-    """Filters + a compact, scannable table; clicking a row reveals full detail and mark-as actions."""
+def _render_results(df, csv_name: str, detail_cols: list[str], tab_key: str, has_fund: bool):
+    """Filters + a clickable row list: click a row to expand its detail, or set its status inline."""
     if df.empty:
         st.info("No results to show.")
         return
 
-    status = status_store.load_status(key)
+    status = status_store.load_status(tab_key)
 
     def key_of(row) -> str:
         return status_store.row_key(row["Company"], row["Fund"] if has_fund else None)
 
-    filter_cols = st.columns([2, 2, 3] if not has_fund else [2, 2, 2, 3])
+    filter_cols = st.columns([2, 2, 3] if has_fund else [2, 2])
     with filter_cols[0]:
-        status_filter = st.selectbox("Show", STATUS_FILTER_OPTIONS, key=f"{key}_status_filter")
+        status_filter = st.selectbox("Show", STATUS_FILTER_OPTIONS, key=f"{tab_key}_status_filter")
     with filter_cols[1]:
-        search = st.text_input("Search company", key=f"{key}_search")
+        search = st.text_input("Search company", key=f"{tab_key}_search")
     fund_filter: list[str] = []
     if has_fund:
         with filter_cols[2]:
-            fund_filter = st.multiselect("Filter by fund", sorted(df["Fund"].unique()), key=f"{key}_fund_filter")
+            fund_filter = st.multiselect("Filter by fund", sorted(df["Fund"].unique()), key=f"{tab_key}_fund_filter")
 
     filtered = df.copy()
     if search:
@@ -74,71 +71,68 @@ def _render_results(df, csv_name: str, compact_cols: list[str], detail_cols: lis
         filtered = filtered[filtered["Fund"].isin(fund_filter)]
 
     filtered["_key"] = filtered.apply(key_of, axis=1)
-    filtered["_item"] = filtered["_key"].apply(lambda k: status_store.get_item(status, k))
-    filtered["Status"] = filtered["_item"].apply(_status_icon)
+    filtered["_status"] = filtered["_key"].apply(lambda k: status_store.get_status(status, k))
 
     if status_filter == "All (hide archived)":
-        filtered = filtered[filtered["_item"].apply(lambda i: i.get("priority") != status_store.PRIORITY_ARCHIVED)]
+        filtered = filtered[filtered["_status"] != status_store.STATUS_ARCHIVED]
     elif status_filter == "Unread only":
-        filtered = filtered[
-            filtered["_item"].apply(lambda i: not i.get("read") and i.get("priority") != status_store.PRIORITY_ARCHIVED)
-        ]
+        filtered = filtered[filtered["_status"] == status_store.STATUS_UNREAD]
     elif status_filter == "⭐ Starred only":
-        filtered = filtered[filtered["_item"].apply(lambda i: i.get("priority") == status_store.PRIORITY_STARRED)]
+        filtered = filtered[filtered["_status"] == status_store.STATUS_STARRED]
     elif status_filter == "🗑 Archived only":
-        filtered = filtered[filtered["_item"].apply(lambda i: i.get("priority") == status_store.PRIORITY_ARCHIVED)]
+        filtered = filtered[filtered["_status"] == status_store.STATUS_ARCHIVED]
 
     st.caption(f"Showing {len(filtered)} of {len(df)} rows")
+    st.download_button(
+        "Export full detail to CSV", df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv"
+    )
 
     if filtered.empty:
         st.info("No rows match the current filters.")
         return
 
-    event = st.dataframe(
-        filtered[["Status"] + compact_cols],
-        width="stretch",
-        column_config=LINK_COLUMN_CONFIG,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"{key}_grid",
-    )
-    st.download_button(
-        "Export full detail to CSV", df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv"
-    )
+    for _, row in filtered.iterrows():
+        row_key = row["_key"]
+        current_status = row["_status"]
+        expand_flag = f"{tab_key}_expanded_{row_key}"
+        if expand_flag not in st.session_state:
+            st.session_state[expand_flag] = False
 
-    selected_rows = event.selection.rows if event and event.selection else []
-    if not selected_rows:
-        st.caption("Click a row above to see its full summary/hypothesis and to mark it read, starred, or archived.")
-        return
+        col_status, col_main, col_link1, col_link2 = st.columns([1.6, 5, 0.7, 0.7])
 
-    row = filtered.iloc[selected_rows[0]]
-    row_key = row["_key"]
-    item = row["_item"]
+        with col_status:
+            new_status = st.selectbox(
+                "Status",
+                status_store.STATUS_OPTIONS,
+                index=status_store.STATUS_OPTIONS.index(current_status),
+                format_func=lambda s: status_store.STATUS_LABELS[s],
+                key=f"{tab_key}_statussel_{row_key}",
+                label_visibility="collapsed",
+            )
+            if new_status != current_status:
+                status_store.set_status(tab_key, status, row_key, new_status)
+                st.rerun()
 
-    with st.container(border=True):
-        st.markdown(f"#### {row['Company']}")
-        for col in detail_cols:
-            if col in row and str(row[col]) not in ("", "nan", "-"):
-                st.markdown(f"**{col}:** {row[col]}")
+        with col_main:
+            if st.button(
+                _row_summary_label(row, has_fund),
+                key=f"{tab_key}_toggle_{row_key}",
+                use_container_width=True,
+            ):
+                st.session_state[expand_flag] = not st.session_state[expand_flag]
 
-        action_cols = st.columns(4)
-        with action_cols[0]:
-            new_read = st.checkbox("Read", value=item.get("read", False), key=f"{key}_read_{row_key}")
-            if new_read != item.get("read", False):
-                status_store.set_item(key, status, row_key, read=new_read)
-                st.rerun()
-        with action_cols[1]:
-            if st.button("⭐ Follow up later", key=f"{key}_star_{row_key}"):
-                status_store.set_item(key, status, row_key, priority=status_store.PRIORITY_STARRED)
-                st.rerun()
-        with action_cols[2]:
-            if st.button("🗑 Not relevant", key=f"{key}_arch_{row_key}"):
-                status_store.set_item(key, status, row_key, priority=status_store.PRIORITY_ARCHIVED)
-                st.rerun()
-        with action_cols[3]:
-            if item.get("priority") and st.button("Clear flag", key=f"{key}_clear_{row_key}"):
-                status_store.set_item(key, status, row_key, priority=None)
-                st.rerun()
+        with col_link1:
+            st.link_button("Open ↗", row["Yahoo Finance"], use_container_width=True)
+        with col_link2:
+            st.link_button("Search ↗", row["IR Search"], use_container_width=True)
+
+        if st.session_state[expand_flag]:
+            with st.container(border=True):
+                for col in detail_cols:
+                    if col in row and str(row[col]) not in ("", "nan", "-"):
+                        st.markdown(f"**{col}:** {row[col]}")
+
+        st.divider()
 
 
 params = st.query_params
@@ -166,7 +160,6 @@ if selected_tab == "funds":
             "Limit to first N funds (0 = all 83 funds)", min_value=0, value=0, step=5
         )
 
-    compact_cols = ["Company", "Fund", "Price drop %", "Position increase %", "Yahoo Finance", "IR Search"]
     detail_cols = ["Summary", "Hypothesis", "Similar companies (same fund)", "Other holders"]
 
     ran_now = False
@@ -186,7 +179,7 @@ if selected_tab == "funds":
             progress.empty()
             timestamp = cache.save_run("funds", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "funds_analysis.csv", compact_cols, detail_cols, key="funds", has_fund=True)
+            _render_results(df, "funds_analysis.csv", detail_cols, tab_key="funds", has_fund=True)
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("funds")
@@ -194,14 +187,13 @@ if selected_tab == "funds":
             st.caption(f"Last updated: {last_run}")
             cached_df = cache.load_latest_run("funds")
             if cached_df is not None:
-                _render_results(cached_df, "funds_analysis.csv", compact_cols, detail_cols, key="funds", has_fund=True)
+                _render_results(cached_df, "funds_analysis.csv", detail_cols, tab_key="funds", has_fund=True)
         else:
             st.info("No run yet — click \"Run Funds Analysis\" above to get started.")
 
 else:
     st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
 
-    compact_cols = ["Company", "Market cap ($M)", "Yahoo Finance", "IR Search"]
     detail_cols = ["Summary", "Hypothesis", "Similar companies (screener)", "Funds holding it"]
 
     ran_now = False
@@ -227,9 +219,7 @@ else:
             progress.empty()
             timestamp = cache.save_run("magicformula", df)
             st.caption(f"Last updated: {timestamp}")
-            _render_results(
-                df, "magic_formula_analysis.csv", compact_cols, detail_cols, key="magicformula", has_fund=False
-            )
+            _render_results(df, "magic_formula_analysis.csv", detail_cols, tab_key="magicformula", has_fund=False)
 
     if not ran_now:
         last_run = cache.load_latest_timestamp("magicformula")
@@ -238,12 +228,7 @@ else:
             cached_df = cache.load_latest_run("magicformula")
             if cached_df is not None:
                 _render_results(
-                    cached_df,
-                    "magic_formula_analysis.csv",
-                    compact_cols,
-                    detail_cols,
-                    key="magicformula",
-                    has_fund=False,
+                    cached_df, "magic_formula_analysis.csv", detail_cols, tab_key="magicformula", has_fund=False
                 )
         else:
             st.info("No run yet — click \"Update Magic Formula Analysis\" above to get started.")

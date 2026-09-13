@@ -1,4 +1,4 @@
-"""Per-item read/priority status (read, starred, archived), persisted locally.
+"""Per-item triage status (unread/read/starred/archived), persisted locally.
 
 Keyed by a stable identifier (ticker, or ticker+fund) rather than row position,
 so marks survive across re-runs even as the underlying data is refreshed.
@@ -10,8 +10,18 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
-PRIORITY_STARRED = "starred"
-PRIORITY_ARCHIVED = "archived"
+STATUS_UNREAD = "unread"
+STATUS_READ = "read"
+STATUS_STARRED = "starred"
+STATUS_ARCHIVED = "archived"
+
+STATUS_LABELS = {
+    STATUS_UNREAD: "New",
+    STATUS_READ: "✓ Read",
+    STATUS_STARRED: "⭐ Follow up later",
+    STATUS_ARCHIVED: "🗑 Not relevant",
+}
+STATUS_OPTIONS = [STATUS_UNREAD, STATUS_READ, STATUS_STARRED, STATUS_ARCHIVED]
 
 
 def _path(tab_key: str) -> Path:
@@ -30,14 +40,12 @@ def save_status(tab_key: str, status: dict) -> None:
     _path(tab_key).write_text(json.dumps(status, ensure_ascii=False, indent=2))
 
 
-def get_item(status: dict, key: str) -> dict:
-    return status.get(key, {"read": False, "priority": None})
+def get_status(status: dict, key: str) -> str:
+    return status.get(key, {}).get("status", STATUS_UNREAD)
 
 
-def set_item(tab_key: str, status: dict, key: str, **updates) -> None:
-    item = dict(get_item(status, key))
-    item.update(updates)
-    status[key] = item
+def set_status(tab_key: str, status: dict, key: str, new_status: str) -> None:
+    status[key] = {"status": new_status}
     save_status(tab_key, status)
 
 
