@@ -1,0 +1,7 @@
+streamlit>=1.38
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.2
+pandas>=2.2
+yfinance>=0.2.43
+python-dotenv>=1.0
