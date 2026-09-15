@@ -82,6 +82,11 @@ def run_funds_analysis(
             summary = market_data.get_business_summary(h.stock_ticker)
         except market_data.MarketDataError:
             summary = narrative.business_summary_fallback(h.stock_name)
+        try:
+            sector = market_data.get_sector(h.stock_ticker)
+            industry = market_data.get_industry(h.stock_ticker)
+        except market_data.MarketDataError:
+            sector = industry = "Unknown"
 
         other_holders = sorted(holders_by_stock[h.stock_ticker] - {h.fund_name})
 
@@ -92,6 +97,8 @@ def run_funds_analysis(
                 "% of Portfolio": round(h.pct_of_portfolio, 2),
                 "Price drop %": round(drop_pct, 1),
                 "Position increase %": round(h.activity_pct, 1),
+                "Sector": sector,
+                "Industry": industry,
                 "Summary": summary,
                 "Other holders": ", ".join(other_holders) if other_holders else "-",
                 "IR Search": market_data.ir_search_link(h.stock_name),

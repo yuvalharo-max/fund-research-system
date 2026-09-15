@@ -23,6 +23,16 @@ def get_ticker_info(ticker: str) -> dict:
     return info
 
 
+def get_sector(ticker: str) -> str:
+    info = get_ticker_info(ticker)
+    return info.get("sector") or "Unknown"
+
+
+def get_industry(ticker: str) -> str:
+    info = get_ticker_info(ticker)
+    return info.get("industry") or "Unknown"
+
+
 def get_business_summary(ticker: str, max_sentences: int = 3) -> str:
     info = get_ticker_info(ticker)
     summary = info.get("longBusinessSummary") or ""

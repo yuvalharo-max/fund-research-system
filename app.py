@@ -1,13 +1,21 @@
 """Market research tool — fund 13F analysis (Dataroma) and Magic Formula Investing."""
 import os
 import subprocess
+import time
 from collections import defaultdict
 from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from src import cache, dataroma_client, magicformula_analysis, magicformula_client, funds_analysis, status_store
+from src import (
+    background_task,
+    cache,
+    dataroma_client,
+    magicformula_analysis,
+    funds_analysis,
+    status_store,
+)
 
 load_dotenv()
 
@@ -42,6 +50,7 @@ with st.expander("⚙️ App maintenance"):
             )
 
 TAB_LABELS = {"funds": "Funds Analysis", "magicformula": "Magic Formula Analysis"}
+TAB_WIDGET_KEY = "active_view_tab"
 
 STATUS_FILTER_OPTIONS = [
     "All (hide archived)",
@@ -69,7 +78,7 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
 def _render_results(
     df, csv_name: str, compact_cols: list[str], detail_cols: list[str], tab_key: str, has_fund: bool
 ):
-    """Filters + an editable grid (change Status inline) + a separate detail viewer below."""
+    """Filters + a compact grid; click the row checkbox to see its detail and mark it."""
     if df.empty:
         st.info("No results to show.")
         return
@@ -143,7 +152,7 @@ def _render_results(
         st.session_state[sel_state_key] = None
         st.caption(
             "Click the checkbox on the left of a row above to see its full detail "
-            "and mark it read, starred, or archived."
+            "(company, sector, industry, investors) and mark it read, starred, or archived."
         )
         return
 
@@ -184,16 +193,47 @@ def _render_results(
                 st.rerun()
 
 
-params = st.query_params
-active_tab = params.get("tab", "funds")
-if active_tab not in TAB_LABELS:
-    active_tab = "funds"
+def _run_or_show_results(task_key: str, csv_name: str, compact_cols, detail_cols, tab_key: str, has_fund: bool):
+    """Show progress for a background task, its result once done, or the last cached run."""
+    task = background_task.get_task(task_key)
 
-selected_tab = st.segmented_control(
-    "View", options=list(TAB_LABELS.keys()), format_func=lambda k: TAB_LABELS[k], default=active_tab
+    if task and task["status"] == "running":
+        i, total, label = task["progress"]
+        st.progress(i / total if total else 0.0, text=f"({i}/{total}) {label}")
+        st.caption("This keeps running even if you switch to the other tab and come back.")
+        time.sleep(1)
+        st.rerun()
+    elif task and task["status"] == "error":
+        st.error(f"Run failed: {task['error']}")
+        background_task.clear_task(task_key)
+    elif task and task["status"] == "done":
+        st.caption("Last updated: just now")
+        _render_results(task["result"], csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+    else:
+        last_run = cache.load_latest_timestamp(tab_key)
+        if last_run:
+            st.caption(f"Last updated: {last_run}")
+            cached_df = cache.load_latest_run(tab_key)
+            if cached_df is not None:
+                _render_results(cached_df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+        else:
+            st.info("No run yet — click the button above to get started.")
+
+
+# Seed the tab widget's state once (from the URL, e.g. after a fresh page load or a
+# direct link like ?tab=magicformula) and let the widget itself own it from then on.
+# Recomputing `default=` from st.query_params on every rerun — instead of only
+# seeding session_state once — made the segmented control need two clicks to
+# switch, since its identity (and therefore its remembered value) shifted under it
+# on the very next rerun.
+if TAB_WIDGET_KEY not in st.session_state:
+    seeded = st.query_params.get("tab", "funds")
+    st.session_state[TAB_WIDGET_KEY] = seeded if seeded in TAB_LABELS else "funds"
+
+st.segmented_control(
+    "View", options=list(TAB_LABELS.keys()), format_func=lambda k: TAB_LABELS[k], key=TAB_WIDGET_KEY
 )
-if selected_tab is None:
-    selected_tab = active_tab
+selected_tab = st.session_state[TAB_WIDGET_KEY]
 st.query_params["tab"] = selected_tab
 
 st.divider()
@@ -218,82 +258,72 @@ if selected_tab == "funds":
         )
 
     compact_cols = ["Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "IR Search"]
-    detail_cols = ["Summary", "Other holders"]
+    detail_cols = ["Sector", "Industry", "Summary", "Other holders"]
 
-    ran_now = False
     if st.button("Run Funds Analysis", type="primary"):
-        ran_now = True
-        progress = st.progress(0.0, text="Starting...")
+        limit, drop, add = fund_limit or None, min_drop_pct, min_add_pct
 
-        def _update(i: int, total: int, label: str):
-            progress.progress(i / total, text=f"({i}/{total}) {label}")
-
-        try:
+        def _job(progress_cb):
             df = funds_analysis.run_funds_analysis(
-                progress_callback=_update,
-                fund_limit=fund_limit or None,
-                min_drop_pct=min_drop_pct,
-                min_add_pct=min_add_pct,
+                progress_callback=progress_cb, fund_limit=limit, min_drop_pct=drop, min_add_pct=add
             )
-        except (dataroma_client.DataromaError,) as exc:
-            st.error(f"Run failed: {exc}")
-            ran_now = False
-        else:
-            progress.empty()
-            timestamp = cache.save_run("funds", df)
-            st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True)
+            cache.save_run("funds", df)
+            return df
 
-    if not ran_now:
-        last_run = cache.load_latest_timestamp("funds")
-        if last_run:
-            st.caption(f"Last updated: {last_run}")
-            cached_df = cache.load_latest_run("funds")
-            if cached_df is not None:
-                _render_results(cached_df, "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True)
-        else:
-            st.info("No run yet — click \"Run Funds Analysis\" above to get started.")
+        if not background_task.start_task("funds", _job):
+            st.warning("A funds analysis run is already in progress.")
+
+    _run_or_show_results(
+        "funds", "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True
+    )
 
 else:
     st.write("Shows companies from the Magic Formula Investing screener with market cap over $1B.")
     st.caption("Data source: [Magic Formula Investing](https://www.magicformulainvesting.com)")
 
+    with st.expander("ℹ️ How these results are chosen and ordered", expanded=False):
+        st.markdown(
+            "**Which companies appear:** pulled from the Magic Formula Investing stock "
+            "screener (ranks companies by combined Earnings Yield + Return on Invested "
+            "Capital), restricted to the top 50 companies with a market cap of at least "
+            "$1 billion.\n\n"
+            "**How they're ordered:** the screener is re-run several more times with "
+            "the minimum market cap lowered step by step (e.g. $750M, $500M, ... down "
+            "to $50M), each time still asking for the top 50. Lowering the minimum lets "
+            "more small-cap companies compete for those 50 spots. A company that keeps "
+            "its spot even against that extra small-cap competition has a stronger "
+            "underlying rank — a bigger gap between its price and its estimated value — "
+            "than one that only makes the top 50 once small caps are excluded. So "
+            "companies are sorted by the **lowest** minimum-market-cap level at which "
+            "they still hold a top-50 spot: the ones that survive the most competition "
+            "are listed first. Ties are broken by (1) whether a fund from your Funds "
+            "Analysis list already holds the company, then (2) market cap."
+        )
+
     compact_cols = ["Company", "Market cap ($M)", "IR Search"]
-    detail_cols = ["Summary", "Funds holding it"]
+    detail_cols = ["Sector", "Industry", "Summary", "Funds holding it"]
 
-    ran_now = False
     if st.button("Update Magic Formula Analysis", type="primary"):
-        ran_now = True
-        progress = st.progress(0.0, text="Starting...")
 
-        def _scrape_update(i: int, total: int, name: str):
-            progress.progress(i / total, text=f"({i}/{total}) Fetching fund list: {name}")
+        def _job(progress_cb):
+            def _scrape_progress(i, total, name):
+                progress_cb(i, total, f"Fetching fund list: {name}")
 
-        def _update(i: int, total: int, label: str):
-            progress.progress(i / total, text=f"({i}/{total}) {label}")
-
-        try:
-            holdings_index = _holdings_by_stock(progress_callback=_scrape_update)
+            holdings_index = _holdings_by_stock(progress_callback=_scrape_progress)
             df = magicformula_analysis.run_magic_formula_analysis(
-                holdings_by_stock=holdings_index, progress_callback=_update
+                holdings_by_stock=holdings_index, progress_callback=progress_cb
             )
-        except (magicformula_client.MagicFormulaError, dataroma_client.DataromaError) as exc:
-            st.error(f"Run failed: {exc}")
-            ran_now = False
-        else:
-            progress.empty()
-            timestamp = cache.save_run("magicformula", df)
-            st.caption(f"Last updated: {timestamp}")
-            _render_results(df, "magic_formula_analysis.csv", compact_cols, detail_cols, tab_key="magicformula", has_fund=False)
+            cache.save_run("magicformula", df)
+            return df
 
-    if not ran_now:
-        last_run = cache.load_latest_timestamp("magicformula")
-        if last_run:
-            st.caption(f"Last updated: {last_run}")
-            cached_df = cache.load_latest_run("magicformula")
-            if cached_df is not None:
-                _render_results(
-                    cached_df, "magic_formula_analysis.csv", compact_cols, detail_cols, tab_key="magicformula", has_fund=False
-                )
-        else:
-            st.info("No run yet — click \"Update Magic Formula Analysis\" above to get started.")
+        if not background_task.start_task("magicformula", _job):
+            st.warning("A Magic Formula run is already in progress.")
+
+    _run_or_show_results(
+        "magicformula",
+        "magic_formula_analysis.csv",
+        compact_cols,
+        detail_cols,
+        tab_key="magicformula",
+        has_fund=False,
+    )

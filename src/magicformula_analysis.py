@@ -54,12 +54,19 @@ def run_magic_formula_analysis(
             summary = market_data.get_business_summary(r.ticker)
         except market_data.MarketDataError:
             summary = narrative.business_summary_fallback(r.name)
+        try:
+            sector = market_data.get_sector(r.ticker)
+            industry = market_data.get_industry(r.ticker)
+        except market_data.MarketDataError:
+            sector = industry = "Unknown"
 
         fund_holders = sorted(holdings_by_stock.get(r.ticker, set()))
 
         rows.append(
             {
                 "Company": f"{r.ticker} - {r.name}",
+                "Sector": sector,
+                "Industry": industry,
                 "Summary": summary,
                 "Funds holding it": ", ".join(fund_holders) if fund_holders else "-",
                 "Market cap ($M)": r.market_cap_million,
