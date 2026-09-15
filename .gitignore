@@ -7,3 +7,4 @@ data/*.json
 data/*.csv
 !data/.gitkeep
 .streamlit/secrets.toml
+update.log

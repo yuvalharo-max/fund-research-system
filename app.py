@@ -1,5 +1,8 @@
 """Market research tool — fund 13F analysis (Dataroma) and Magic Formula Investing."""
+import os
+import subprocess
 from collections import defaultdict
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -8,8 +11,35 @@ from src import cache, dataroma_client, magicformula_analysis, magicformula_clie
 
 load_dotenv()
 
+PROJECT_DIR = Path(__file__).resolve().parent
+
 st.set_page_config(page_title="Market Research Tool", layout="wide")
 st.title("Market Research & Investment Idea Finder")
+
+with st.expander("⚙️ App maintenance"):
+    if st.button("🔄 Update Tool (pull latest changes + restart)"):
+        with st.spinner("Checking for updates..."):
+            result = subprocess.run(
+                ["git", "pull", "--ff-only"], cwd=PROJECT_DIR, capture_output=True, text=True
+            )
+        output = (result.stdout + result.stderr).strip()
+        if result.returncode != 0:
+            st.error(f"Update failed:\n\n{output}")
+        elif "Already up to date" in result.stdout:
+            st.info("Already up to date — nothing to restart.")
+        else:
+            st.success(
+                "Pulled new changes — restarting now. This page will show a brief "
+                "connection error and reconnect automatically in a few seconds."
+            )
+            st.code(output)
+            subprocess.Popen(
+                ["bash", str(PROJECT_DIR / "update_restart.sh"), str(os.getpid())],
+                cwd=PROJECT_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
 
 TAB_LABELS = {"funds": "Funds Analysis", "magicformula": "Magic Formula Analysis"}
 
