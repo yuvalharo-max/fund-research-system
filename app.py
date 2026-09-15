@@ -17,6 +17,7 @@ st.set_page_config(page_title="Market Research Tool", layout="wide")
 st.title("Market Research & Investment Idea Finder")
 
 with st.expander("⚙️ App maintenance"):
+    st.caption(f"marker: {status_store.RESTART_TEST_MARKER}")
     if st.button("🔄 Update Tool (pull latest changes + restart)"):
         with st.spinner("Checking for updates..."):
             result = subprocess.run(
