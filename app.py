@@ -23,6 +23,36 @@ load_dotenv()
 PROJECT_DIR = Path(__file__).resolve().parent
 
 st.set_page_config(page_title="Market Research Tool", layout="wide")
+
+st.markdown(
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+html, body, [class*="css"] { font-family: 'Inter', -apple-system, sans-serif; }
+
+h1 { font-weight: 700 !important; letter-spacing: -0.02em; }
+
+/* Buttons: rounder, a bit of lift on hover instead of the flat default look */
+div.stButton > button, div.stDownloadButton > button {
+    border-radius: 10px;
+    font-weight: 600;
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+div.stButton > button:hover, div.stDownloadButton > button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(108, 92, 231, 0.18);
+}
+
+/* Segmented control (the tab switcher) pills */
+button[data-testid^="stBaseButton-segmented_control"] {
+    border-radius: 10px !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 st.title("Market Research & Investment Idea Finder")
 
 with st.expander("⚙️ App maintenance"):
@@ -90,15 +120,18 @@ def _render_results(
     def key_of(row) -> str:
         return status_store.row_key(row["Company"], row["Fund"] if has_fund else None)
 
-    filter_cols = st.columns([2, 2, 3] if has_fund else [2, 2])
-    with filter_cols[0]:
-        status_filter = st.selectbox("Show", STATUS_FILTER_OPTIONS, key=f"{tab_key}_status_filter")
-    with filter_cols[1]:
-        search = st.text_input("Search company", key=f"{tab_key}_search")
-    fund_filter: list[str] = []
-    if has_fund:
-        with filter_cols[2]:
-            fund_filter = st.multiselect("Filter by fund", sorted(df["Fund"].unique()), key=f"{tab_key}_fund_filter")
+    with st.container(border=True):
+        filter_cols = st.columns([2, 2, 3] if has_fund else [2, 2])
+        with filter_cols[0]:
+            status_filter = st.selectbox("🔎 Show", STATUS_FILTER_OPTIONS, key=f"{tab_key}_status_filter")
+        with filter_cols[1]:
+            search = st.text_input("Search", placeholder="Search company...", key=f"{tab_key}_search")
+        fund_filter: list[str] = []
+        if has_fund:
+            with filter_cols[2]:
+                fund_filter = st.multiselect(
+                    "Filter by fund", sorted(df["Fund"].unique()), key=f"{tab_key}_fund_filter"
+                )
 
     filtered = df.copy()
     if search:
@@ -282,11 +315,12 @@ if selected_tab == "funds":
         if not background_task.start_task("funds", _job):
             st.warning("A funds analysis run is already in progress.")
 
-    weigh_ownership = st.toggle(
-        "🔀 Also weigh position size vs. the company's own market cap "
-        "(top = big in both the fund's portfolio AND the company; bottom = small in both)",
-        key="funds_weigh_ownership",
-    )
+    with st.container(border=True):
+        weigh_ownership = st.toggle(
+            "🔀 Also weigh position size vs. the company's own market cap "
+            "(top = big in both the fund's portfolio AND the company; bottom = small in both)",
+            key="funds_weigh_ownership",
+        )
 
     def _resort(df):
         if not weigh_ownership or df.empty or "Company Market Cap ($M)" not in df.columns:
