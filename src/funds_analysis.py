@@ -87,6 +87,10 @@ def run_funds_analysis(
             industry = market_data.get_industry(h.stock_ticker)
         except market_data.MarketDataError:
             sector = industry = "Unknown"
+        try:
+            market_cap = market_data.get_market_cap(h.stock_ticker)
+        except market_data.MarketDataError:
+            market_cap = None
 
         other_holders = sorted(holders_by_stock[h.stock_ticker] - {h.fund_name})
 
@@ -97,6 +101,8 @@ def run_funds_analysis(
                 "% of Portfolio": round(h.pct_of_portfolio, 2),
                 "Price drop %": round(drop_pct, 1),
                 "Position increase %": round(h.activity_pct, 1),
+                "Position Value ($)": h.value,
+                "Company Market Cap ($M)": round(market_cap / 1_000_000, 1) if market_cap else None,
                 "Sector": sector,
                 "Industry": industry,
                 "Summary": summary,

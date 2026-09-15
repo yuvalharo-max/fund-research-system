@@ -23,6 +23,11 @@ def get_ticker_info(ticker: str) -> dict:
     return info
 
 
+def get_market_cap(ticker: str) -> float | None:
+    info = get_ticker_info(ticker)
+    return info.get("marketCap")
+
+
 def get_sector(ticker: str) -> str:
     info = get_ticker_info(ticker)
     return info.get("sector") or "Unknown"

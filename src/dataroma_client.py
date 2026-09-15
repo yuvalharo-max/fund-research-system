@@ -29,6 +29,7 @@ class Holding:
     shares: int | None
     reported_price: float | None
     current_price: float | None
+    value: float | None
 
 
 def _get(url: str) -> BeautifulSoup:
@@ -126,6 +127,7 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
         except ValueError:
             pass
         reported_price = _parse_money(cells[5])
+        value = _parse_money(cells[6]) if len(cells) > 6 else None
         current_price = _parse_money(cells[8]) if len(cells) > 8 else None
 
         holdings.append(
@@ -140,6 +142,7 @@ def get_holdings(fund_ticker: str, fund_name: str) -> tuple[list[Holding], str |
                 shares=shares,
                 reported_price=reported_price,
                 current_price=current_price,
+                value=value,
             )
         )
 

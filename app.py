@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -62,6 +63,7 @@ STATUS_FILTER_OPTIONS = [
 
 COLUMN_CONFIG = {
     "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
+    "Position Value ($)": st.column_config.NumberColumn("Position Value ($)", format="$%,.0f"),
 }
 
 
@@ -193,7 +195,9 @@ def _render_results(
                 st.rerun()
 
 
-def _run_or_show_results(task_key: str, csv_name: str, compact_cols, detail_cols, tab_key: str, has_fund: bool):
+def _run_or_show_results(
+    task_key: str, csv_name: str, compact_cols, detail_cols, tab_key: str, has_fund: bool, resort_fn=None
+):
     """Show progress for a background task, its result once done, or the last cached run."""
     task = background_task.get_task(task_key)
 
@@ -208,13 +212,16 @@ def _run_or_show_results(task_key: str, csv_name: str, compact_cols, detail_cols
         background_task.clear_task(task_key)
     elif task and task["status"] == "done":
         st.caption("Last updated: just now")
-        _render_results(task["result"], csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+        df = resort_fn(task["result"]) if resort_fn else task["result"]
+        _render_results(df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
     else:
         last_run = cache.load_latest_timestamp(tab_key)
         if last_run:
             st.caption(f"Last updated: {last_run}")
             cached_df = cache.load_latest_run(tab_key)
             if cached_df is not None:
+                if resort_fn:
+                    cached_df = resort_fn(cached_df)
                 _render_results(cached_df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
         else:
             st.info("No run yet — click the button above to get started.")
@@ -257,8 +264,10 @@ if selected_tab == "funds":
             "Quick test: limit to first N funds (0 = all 83)", min_value=0, value=0, step=5
         )
 
-    compact_cols = ["Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "IR Search"]
-    detail_cols = ["Sector", "Industry", "Summary", "Other holders"]
+    compact_cols = [
+        "Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "Position Value ($)", "IR Search",
+    ]
+    detail_cols = ["Sector", "Industry", "Company Market Cap ($M)", "Summary", "Other holders"]
 
     if st.button("Run Funds Analysis", type="primary"):
         limit, drop, add = fund_limit or None, min_drop_pct, min_add_pct
@@ -273,8 +282,30 @@ if selected_tab == "funds":
         if not background_task.start_task("funds", _job):
             st.warning("A funds analysis run is already in progress.")
 
+    weigh_ownership = st.toggle(
+        "🔀 Also weigh position size vs. the company's own market cap "
+        "(top = big in both the fund's portfolio AND the company; bottom = small in both)",
+        key="funds_weigh_ownership",
+    )
+
+    def _resort(df):
+        if not weigh_ownership or df.empty or "Company Market Cap ($M)" not in df.columns:
+            return df
+        df = df.copy()
+        has_cap = df["Company Market Cap ($M)"].notna() & df["Position Value ($)"].notna()
+        ownership_pct = pd.Series(0.0, index=df.index)
+        ownership_pct[has_cap] = df.loc[has_cap, "Position Value ($)"] / (
+            df.loc[has_cap, "Company Market Cap ($M)"] * 1_000_000
+        )
+        portfolio_rank = df["% of Portfolio"].rank(ascending=False, method="min")
+        drop_rank = df["Price drop %"].rank(ascending=False, method="min")
+        add_rank = df["Position increase %"].rank(ascending=False, method="min")
+        ownership_rank = ownership_pct.rank(ascending=False, method="min")
+        combined = portfolio_rank + drop_rank + add_rank + ownership_rank
+        return df.assign(_combined=combined).sort_values("_combined").drop(columns="_combined").reset_index(drop=True)
+
     _run_or_show_results(
-        "funds", "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True
+        "funds", "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True, resort_fn=_resort
     )
 
 else:
