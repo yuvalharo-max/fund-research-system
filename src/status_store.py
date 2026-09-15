@@ -5,8 +5,6 @@ so marks survive across re-runs even as the underlying data is refreshed.
 """
 from __future__ import annotations
 
-RESTART_TEST_MARKER = "restart-test-1"
-
 import json
 from pathlib import Path
 
