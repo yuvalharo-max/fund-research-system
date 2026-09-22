@@ -93,11 +93,9 @@ STATUS_FILTER_OPTIONS = [
     "Everything",
 ]
 
-STATUS_ICON = {
-    status_store.STATUS_UNREAD: "",
-    status_store.STATUS_READ: "✓ ",
-    status_store.STATUS_STARRED: "⭐ ",
-    status_store.STATUS_ARCHIVED: "🗑 ",
+COLUMN_CONFIG = {
+    "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
+    "Position Value ($)": st.column_config.NumberColumn("Position Value ($)", format="dollar"),
 }
 
 
@@ -182,7 +180,7 @@ def _render_price_chart(ticker: str, fund_ticker: str, fund_name: str, other_nam
 def _render_results(
     df, csv_name: str, compact_cols: list[str], detail_cols: list[str], tab_key: str, has_fund: bool
 ):
-    """Filters + a clickable list; click a company's name to expand its full detail and mark it."""
+    """Filters + a compact grid; pick a company below it to see its full detail and mark it."""
     if df.empty:
         st.info("No results to show.")
         return
@@ -233,88 +231,70 @@ def _render_results(
         st.info("No rows match the current filters.")
         return
 
+    filtered["Status"] = filtered["_status"].apply(lambda s: status_store.STATUS_LABELS[s])
     filtered = filtered.reset_index(drop=True)
 
-    PERCENT_COLS = {"% of Portfolio", "Position increase %"}
-    stat_cols = [c for c in compact_cols if c not in ("Company", "IR Search")]
+    ROW_PX = 35
+    st.dataframe(
+        filtered[["Status"] + compact_cols],
+        width="stretch",
+        height=ROW_PX * (len(filtered) + 1) + 3,  # +1 header row; show every row, no inner scrollbar
+        row_height=ROW_PX,
+        column_config=COLUMN_CONFIG,
+        hide_index=True,
+        key=f"{tab_key}_grid",
+    )
 
-    def _fmt_stat(col: str, val) -> str:
-        if col == "Position Value ($)":
-            return f"${val:,.0f}"
-        if col in PERCENT_COLS:
-            return f"{val}%"
-        if col.endswith("($M)"):
-            try:
-                return f"{float(val):,.0f}"
-            except (TypeError, ValueError):
-                return str(val)
-        return str(val)
+    # Streamlit's interactive grid only registers clicks on its own selection
+    # checkbox, not on a cell's text (e.g. the company name) — this picker is a
+    # reliable substitute for opening the same detail view from any cell's name.
+    if has_fund:
+        labels = [f"{r['Company']} ({r['Fund']})" for _, r in filtered.iterrows()]
+    else:
+        labels = filtered["Company"].tolist()
+    chosen = st.selectbox("🔍 Inspect a company", ["—"] + labels, key=f"{tab_key}_inspect")
+    if chosen == "—":
+        return
+    row = filtered.iloc[labels.index(chosen)]
+    row_key = row["_key"]
+    current_status = row["_status"]
 
-    for _, row in filtered.iterrows():
-        row_key = row["_key"]
-        current_status = row["_status"]
-        expand_key = f"{tab_key}_expanded_{row_key}"
-        st.session_state.setdefault(expand_key, False)
+    with st.container(border=True):
+        st.markdown(f"#### {row['Company']}")
+        for col in detail_cols:
+            if col in row and str(row[col]) not in ("", "nan", "-"):
+                st.markdown(f"**{col}:** {row[col]}")
 
-        name_col, ir_col = st.columns([6, 1])
-        with name_col:
-            label = f"{STATUS_ICON[current_status]}{row['Company']}"
-            if has_fund:
-                label += f"  —  {row['Fund']}"
-            # Clicking the company name itself opens/closes the detail panel below it.
-            if st.button(label, key=f"{tab_key}_namebtn_{row_key}", use_container_width=True):
-                st.session_state[expand_key] = not st.session_state[expand_key]
-        with ir_col:
-            if str(row.get("IR Search", "")):
-                st.link_button("IR ↗", row["IR Search"], use_container_width=True)
+        action_cols = st.columns(4)
+        with action_cols[0]:
+            new_read = st.checkbox(
+                "Read", value=current_status == status_store.STATUS_READ, key=f"{tab_key}_read_{row_key}"
+            )
+            if new_read and current_status == status_store.STATUS_UNREAD:
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_READ)
+                st.rerun()
+            elif not new_read and current_status == status_store.STATUS_READ:
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
+                st.rerun()
+        with action_cols[1]:
+            if st.button("⭐ Follow up later", key=f"{tab_key}_star_{row_key}"):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_STARRED)
+                st.rerun()
+        with action_cols[2]:
+            if st.button("🗑 Not relevant", key=f"{tab_key}_arch_{row_key}"):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_ARCHIVED)
+                st.rerun()
+        with action_cols[3]:
+            if current_status != status_store.STATUS_UNREAD and st.button(
+                "Clear flag", key=f"{tab_key}_clear_{row_key}"
+            ):
+                status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
+                st.rerun()
 
-        stat_bits = [
-            f"{col}: {_fmt_stat(col, row[col])}"
-            for col in stat_cols
-            if row.get(col) not in (None, "", "-") and str(row.get(col)) != "nan"
-        ]
-        # st.caption renders markdown, which treats a bare "$" as a LaTeX math
-        # delimiter and silently eats it — escape it so dollar amounts show correctly.
-        st.caption("  ·  ".join(stat_bits).replace("$", "\\$"))
-
-        if st.session_state[expand_key]:
-            with st.container(border=True):
-                for col in detail_cols:
-                    if col in row and str(row[col]) not in ("", "nan", "-"):
-                        st.markdown(f"**{col}:** {row[col]}".replace("$", "\\$"))
-
-                action_cols = st.columns(4)
-                with action_cols[0]:
-                    new_read = st.checkbox(
-                        "Read", value=current_status == status_store.STATUS_READ, key=f"{tab_key}_read_{row_key}"
-                    )
-                    if new_read and current_status == status_store.STATUS_UNREAD:
-                        status_store.set_status(tab_key, status, row_key, status_store.STATUS_READ)
-                        st.rerun()
-                    elif not new_read and current_status == status_store.STATUS_READ:
-                        status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
-                        st.rerun()
-                with action_cols[1]:
-                    if st.button("⭐ Follow up later", key=f"{tab_key}_star_{row_key}"):
-                        status_store.set_status(tab_key, status, row_key, status_store.STATUS_STARRED)
-                        st.rerun()
-                with action_cols[2]:
-                    if st.button("🗑 Not relevant", key=f"{tab_key}_arch_{row_key}"):
-                        status_store.set_status(tab_key, status, row_key, status_store.STATUS_ARCHIVED)
-                        st.rerun()
-                with action_cols[3]:
-                    if current_status != status_store.STATUS_UNREAD and st.button(
-                        "Clear flag", key=f"{tab_key}_clear_{row_key}"
-                    ):
-                        status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
-                        st.rerun()
-
-                if has_fund and str(row.get("_ticker", "")):
-                    other_names = [n for n in str(row.get("_other_holder_names", "")).split("|") if n]
-                    other_tickers = [t for t in str(row.get("_other_holder_tickers", "")).split("|") if t]
-                    _render_price_chart(row["_ticker"], row["_fund_ticker"], row["Fund"], other_names, other_tickers)
-
-        st.divider()
+        if has_fund and str(row.get("_ticker", "")):
+            other_names = [n for n in str(row.get("_other_holder_names", "")).split("|") if n]
+            other_tickers = [t for t in str(row.get("_other_holder_tickers", "")).split("|") if t]
+            _render_price_chart(row["_ticker"], row["_fund_ticker"], row["Fund"], other_names, other_tickers)
 
 
 def _run_or_show_results(
