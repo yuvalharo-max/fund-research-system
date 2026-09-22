@@ -1,4 +1,5 @@
 """Market research tool — fund 13F analysis (Dataroma) and Magic Formula Investing."""
+import datetime as dt
 import os
 import subprocess
 import time
@@ -14,6 +15,7 @@ from src import (
     cache,
     dataroma_client,
     magicformula_analysis,
+    market_data,
     funds_analysis,
     status_store,
 )
@@ -93,7 +95,7 @@ STATUS_FILTER_OPTIONS = [
 
 COLUMN_CONFIG = {
     "IR Search": st.column_config.LinkColumn("IR Search", display_text="Search ↗", width="small"),
-    "Position Value ($)": st.column_config.NumberColumn("Position Value ($)", format="$%,.0f"),
+    "Position Value ($)": st.column_config.NumberColumn("Position Value ($)", format="dollar"),
 }
 
 
@@ -107,10 +109,78 @@ def _holdings_by_stock(progress_callback=None) -> dict[str, set[str]]:
     return holdings_by_stock
 
 
+def _render_price_chart(ticker: str, fund_ticker: str, fund_name: str, other_names: list[str], other_tickers: list[str]):
+    """5y price line with a marker per quarter; hovering a marker lists what every
+    tracked fund holding this stock did that quarter (portfolio %, activity, value)."""
+    import calendar
+
+    import plotly.graph_objects as go
+
+    try:
+        hist = market_data.get_price_history(ticker, period="5y")
+    except market_data.MarketDataError as exc:
+        st.caption(f"Price chart unavailable: {exc}")
+        return
+
+    fund_pairs = [(fund_ticker, fund_name)] + list(zip(other_tickers, other_names))
+    with st.spinner("Loading quarterly fund activity for the chart..."):
+        histories = dataroma_client.get_stock_histories([fp[0] for fp in fund_pairs], ticker)
+
+    quarter_dates: dict[tuple[int, int], dt.date] = {}
+    for records in histories.values():
+        for r in records:
+            end_day = calendar.monthrange(r.year, r.quarter * 3)[1]
+            quarter_dates[(r.year, r.quarter)] = dt.date(r.year, r.quarter * 3, end_day)
+
+    hist_start = hist.index.min().date()
+    marker_x, marker_y, hover_texts = [], [], []
+    for (year, q), qdate in sorted(quarter_dates.items(), key=lambda kv: kv[1]):
+        if qdate < hist_start:
+            continue
+        sub = hist[hist.index.date <= qdate]
+        if sub.empty:
+            continue
+        marker_x.append(sub.index[-1])
+        marker_y.append(float(sub["Close"].iloc[-1]))
+
+        lines = [f"<b>{year} Q{q}</b>"]
+        for ftkr, fname in fund_pairs:
+            rec = next((r for r in histories.get(ftkr, []) if (r.year, r.quarter) == (year, q)), None)
+            if rec is None:
+                continue
+            if not rec.activity_direction:
+                activity = "No change"
+            elif rec.activity_pct is not None:
+                activity = f"{rec.activity_direction} {rec.activity_pct:.1f}%"
+            else:
+                activity = rec.activity_direction
+            value = rec.shares * rec.reported_price if rec.shares and rec.reported_price else None
+            pct_str = f"{rec.pct_of_portfolio:.1f}%" if rec.pct_of_portfolio is not None else "n/a"
+            value_str = f"${value:,.0f}" if value else "n/a"
+            lines.append(f"{fname}: {pct_str} of portfolio, {activity}, value {value_str}")
+        hover_texts.append("<br>".join(lines))
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"], mode="lines", name="Price", line=dict(color="#6C5CE7")))
+    fig.add_trace(
+        go.Scatter(
+            x=marker_x,
+            y=marker_y,
+            mode="markers",
+            name="Quarter-end",
+            marker=dict(size=8, color="#FF6B6B"),
+            text=hover_texts,
+            hovertemplate="%{text}<extra></extra>",
+        )
+    )
+    fig.update_layout(height=420, margin=dict(l=10, r=10, t=30, b=10), showlegend=False, title="5-year price")
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def _render_results(
     df, csv_name: str, compact_cols: list[str], detail_cols: list[str], tab_key: str, has_fund: bool
 ):
-    """Filters + a compact grid; click the row checkbox to see its detail and mark it."""
+    """Filters + a compact grid; pick a company below it to see its full detail and mark it."""
     if df.empty:
         st.info("No results to show.")
         return
@@ -152,8 +222,9 @@ def _render_results(
         filtered = filtered[filtered["_status"] == status_store.STATUS_ARCHIVED]
 
     st.caption(f"Showing {len(filtered)} of {len(df)} rows")
+    export_df = df[[c for c in df.columns if not c.startswith("_")]]
     st.download_button(
-        "Export full detail to CSV", df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv"
+        "Export full detail to CSV", export_df.to_csv(index=False).encode("utf-8-sig"), csv_name, "text/csv"
     )
 
     if filtered.empty:
@@ -163,35 +234,28 @@ def _render_results(
     filtered["Status"] = filtered["_status"].apply(lambda s: status_store.STATUS_LABELS[s])
     filtered = filtered.reset_index(drop=True)
 
-    event = st.dataframe(
+    ROW_PX = 35
+    st.dataframe(
         filtered[["Status"] + compact_cols],
         width="stretch",
+        height=ROW_PX * (len(filtered) + 1) + 3,  # +1 header row; show every row, no inner scrollbar
+        row_height=ROW_PX,
         column_config=COLUMN_CONFIG,
-        on_select="rerun",
-        selection_mode="single-row",
+        hide_index=True,
         key=f"{tab_key}_grid",
     )
 
-    # Remember the selected row by its stable key in session_state, not just the
-    # grid's own reported selection — changing Status updates that column's text,
-    # which resets the grid's selection on the next rerun, closing the panel right
-    # when a status button is clicked. Session state survives that.
-    sel_state_key = f"{tab_key}_selected_key"
-    selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        st.session_state[sel_state_key] = filtered.iloc[selected_rows[0]]["_key"]
-
-    selected_key = st.session_state.get(sel_state_key)
-    matches = filtered[filtered["_key"] == selected_key] if selected_key else filtered.iloc[0:0]
-    if matches.empty:
-        st.session_state[sel_state_key] = None
-        st.caption(
-            "Click the checkbox on the left of a row above to see its full detail "
-            "(company, sector, industry, investors) and mark it read, starred, or archived."
-        )
+    # Streamlit's interactive grid only registers clicks on its own selection
+    # checkbox, not on a cell's text (e.g. the company name) — this picker is a
+    # reliable substitute for opening the same detail view from any cell's name.
+    if has_fund:
+        labels = [f"{r['Company']} ({r['Fund']})" for _, r in filtered.iterrows()]
+    else:
+        labels = filtered["Company"].tolist()
+    chosen = st.selectbox("🔍 Inspect a company", ["—"] + labels, key=f"{tab_key}_inspect")
+    if chosen == "—":
         return
-
-    row = matches.iloc[0]
+    row = filtered.iloc[labels.index(chosen)]
     row_key = row["_key"]
     current_status = row["_status"]
 
@@ -226,6 +290,11 @@ def _render_results(
             ):
                 status_store.set_status(tab_key, status, row_key, status_store.STATUS_UNREAD)
                 st.rerun()
+
+        if has_fund and str(row.get("_ticker", "")):
+            other_names = [n for n in str(row.get("_other_holder_names", "")).split("|") if n]
+            other_tickers = [t for t in str(row.get("_other_holder_tickers", "")).split("|") if t]
+            _render_price_chart(row["_ticker"], row["_fund_ticker"], row["Fund"], other_names, other_tickers)
 
 
 def _run_or_show_results(
@@ -298,7 +367,8 @@ if selected_tab == "funds":
         )
 
     compact_cols = [
-        "Company", "Fund", "% of Portfolio", "Price drop %", "Position increase %", "Position Value ($)", "IR Search",
+        "Company", "Fund", "% of Portfolio", "Quarter Price Move", "YTD Price Move",
+        "Position increase %", "Previous Position Change", "Position Value ($)", "IR Search",
     ]
     detail_cols = ["Sector", "Industry", "Company Market Cap ($M)", "Summary", "Other holders"]
 
@@ -332,7 +402,7 @@ if selected_tab == "funds":
             df.loc[has_cap, "Company Market Cap ($M)"] * 1_000_000
         )
         portfolio_rank = df["% of Portfolio"].rank(ascending=False, method="min")
-        drop_rank = df["Price drop %"].rank(ascending=False, method="min")
+        drop_rank = df["Quarter Price Move %"].fillna(0).rank(ascending=True, method="min")
         add_rank = df["Position increase %"].rank(ascending=False, method="min")
         ownership_rank = ownership_pct.rank(ascending=False, method="min")
         combined = portfolio_rank + drop_rank + add_rank + ownership_rank

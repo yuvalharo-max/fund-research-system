@@ -32,6 +32,17 @@ class Holding:
     value: float | None
 
 
+@dataclass
+class QuarterRecord:
+    year: int
+    quarter: int
+    shares: int | None
+    pct_of_portfolio: float | None
+    activity_direction: str | None  # "Add" | "Reduce" | "Buy" | "Sell" | None
+    activity_pct: float | None
+    reported_price: float | None
+
+
 def _get(url: str) -> BeautifulSoup:
     try:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
@@ -174,3 +185,91 @@ def get_all_holdings(
                 progress_callback(done, len(funds), fund["name"])
 
     return all_holdings, portfolio_dates
+
+
+def get_stock_history(fund_ticker: str, stock_ticker: str) -> list[QuarterRecord]:
+    """Full quarter-by-quarter holding/activity history for one (fund, stock) pair."""
+    soup = _get(f"{BASE_URL}/m/hist/hist.php?f={fund_ticker}&s={stock_ticker}")
+
+    table = soup.find("table", id="grid")
+    if table is None:
+        raise DataromaError(
+            f"No history table found for {fund_ticker}/{stock_ticker} — the site structure may have changed."
+        )
+
+    records: list[QuarterRecord] = []
+    for tr in table.find_all("tr")[1:]:  # skip header row
+        cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+        if len(cells) < 6:
+            continue
+        period_match = re.match(r"(\d{4})\s*Q(\d)", cells[0])
+        if not period_match:
+            continue
+        year, quarter = int(period_match.group(1)), int(period_match.group(2))
+        shares = None
+        try:
+            shares = int(cells[1].replace(",", "")) if cells[1] else None
+        except ValueError:
+            pass
+        try:
+            pct_portfolio = float(cells[2]) if cells[2] else None
+        except ValueError:
+            pct_portfolio = None
+        direction, activity_pct = _parse_activity(cells[3])
+        reported_price = _parse_money(cells[5])
+
+        records.append(
+            QuarterRecord(
+                year=year,
+                quarter=quarter,
+                shares=shares,
+                pct_of_portfolio=pct_portfolio,
+                activity_direction=direction,
+                activity_pct=activity_pct,
+                reported_price=reported_price,
+            )
+        )
+
+    return records
+
+
+def get_stock_histories(
+    fund_tickers: list[str], stock_ticker: str, max_workers: int = 8
+) -> dict[str, list[QuarterRecord]]:
+    """get_stock_history for several funds (holding the same stock) concurrently."""
+    results: dict[str, list[QuarterRecord]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_stock_history, fund_ticker, stock_ticker): fund_ticker
+            for fund_ticker in fund_tickers
+        }
+        for future in as_completed(futures):
+            fund_ticker = futures[future]
+            try:
+                results[fund_ticker] = future.result()
+            except DataromaError:
+                results[fund_ticker] = []
+    return results
+
+
+def get_stock_histories_for_pairs(
+    pairs: list[tuple[str, str]], progress_callback=None, max_workers: int = 15
+) -> dict[tuple[str, str], list[QuarterRecord]]:
+    """get_stock_history for many (fund_ticker, stock_ticker) pairs concurrently."""
+    results: dict[tuple[str, str], list[QuarterRecord]] = {}
+    done = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_stock_history, fund_ticker, stock_ticker): (fund_ticker, stock_ticker)
+            for fund_ticker, stock_ticker in pairs
+        }
+        for future in as_completed(futures):
+            pair = futures[future]
+            try:
+                results[pair] = future.result()
+            except DataromaError:
+                results[pair] = []
+            done += 1
+            if progress_callback:
+                progress_callback(done, len(pairs), f"{pair[1]} @ {pair[0]}")
+    return results

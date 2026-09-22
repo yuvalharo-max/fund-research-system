@@ -64,16 +64,29 @@ def get_price_on_or_before(ticker: str, target_date: dt.date) -> float | None:
     return float(hist["Close"].iloc[-1])
 
 
-def get_prices_batch(
-    pairs: list[tuple[str, dt.date]], max_workers: int = 4
-) -> dict[tuple[str, dt.date], float | None]:
-    """Resolve many (ticker, date) -> price lookups concurrently (I/O-bound network calls)."""
+def get_price_on_or_after(ticker: str, target_date: dt.date) -> float | None:
+    """Closing price on target_date, or the nearest later trading day (e.g. a quarter/year start)."""
+    start = target_date
+    end = target_date + dt.timedelta(days=10)
+    try:
+        hist = yf.Ticker(ticker).history(start=start.isoformat(), end=end.isoformat())
+    except Exception as exc:
+        raise MarketDataError(f"Could not fetch price history for {ticker}: {exc}") from exc
+    if hist.empty:
+        return None
+    hist = hist[hist.index.date >= target_date]
+    if hist.empty:
+        return None
+    return float(hist["Close"].iloc[0])
+
+
+def _batch(pairs, lookup_fn, max_workers: int = 4) -> dict[tuple[str, dt.date], float | None]:
     results: dict[tuple[str, dt.date], float | None] = {}
 
-    def _one(pair: tuple[str, dt.date]) -> tuple[tuple[str, dt.date], float | None]:
+    def _one(pair: tuple[str, dt.date]):
         ticker, target_date = pair
         try:
-            return pair, get_price_on_or_before(ticker, target_date)
+            return pair, lookup_fn(ticker, target_date)
         except MarketDataError:
             return pair, None
 
@@ -81,6 +94,31 @@ def get_prices_batch(
         for pair, price in executor.map(_one, pairs):
             results[pair] = price
     return results
+
+
+def get_prices_batch(
+    pairs: list[tuple[str, dt.date]], max_workers: int = 4
+) -> dict[tuple[str, dt.date], float | None]:
+    """Resolve many (ticker, date) -> price-on-or-before lookups concurrently."""
+    return _batch(pairs, get_price_on_or_before, max_workers)
+
+
+def get_prices_batch_after(
+    pairs: list[tuple[str, dt.date]], max_workers: int = 4
+) -> dict[tuple[str, dt.date], float | None]:
+    """Resolve many (ticker, date) -> price-on-or-after lookups concurrently."""
+    return _batch(pairs, get_price_on_or_after, max_workers)
+
+
+def get_price_history(ticker: str, period: str = "5y"):
+    """Daily close price history as a DataFrame (columns include 'Close'), indexed by date."""
+    try:
+        hist = yf.Ticker(ticker).history(period=period)
+    except Exception as exc:
+        raise MarketDataError(f"Could not fetch price history for {ticker}: {exc}") from exc
+    if hist.empty:
+        raise MarketDataError(f"No price history available for {ticker}")
+    return hist
 
 
 def prefetch_ticker_info(tickers: list[str], max_workers: int = 4) -> None:
