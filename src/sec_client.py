@@ -30,8 +30,7 @@ def _headers() -> dict:
     email = os.getenv("SEC_CONTACT_EMAIL", "").strip()
     if not email:
         raise SecError(
-            "SEC_CONTACT_EMAIL is not set in .env — the SEC requires a contact email in every "
-            "request (fair-access policy). Add SEC_CONTACT_EMAIL=you@example.com to .env and restart."
+            "No SEC contact email is set on this computer — enter it in the field at the top of this tab."
         )
     return {"User-Agent": f"fund-research-system {email}"}
 

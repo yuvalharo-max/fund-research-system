@@ -1,6 +1,7 @@
 """Market research tool — fund 13F analysis (Dataroma) and Magic Formula Investing."""
 import datetime as dt
 import os
+import re
 import subprocess
 import time
 from collections import defaultdict
@@ -24,6 +25,15 @@ from src import (
 load_dotenv()
 
 PROJECT_DIR = Path(__file__).resolve().parent
+
+
+def _save_env_var(name: str, value: str) -> None:
+    """Set NAME=value in the local (gitignored) .env, replacing any existing line, and apply it now."""
+    env_path = PROJECT_DIR / ".env"
+    lines = env_path.read_text().splitlines() if env_path.exists() else []
+    lines = [line for line in lines if not line.startswith(f"{name}=")] + [f"{name}={value}"]
+    env_path.write_text("\n".join(lines) + "\n")
+    os.environ[name] = value
 
 st.set_page_config(page_title="Market Research Tool", layout="wide")
 
@@ -558,9 +568,27 @@ elif selected_tab == "buybacks":
             "Mentions of older programs (\"as previously announced in April…\") are not counted as new events."
         )
 
+    sec_email = os.getenv("SEC_CONTACT_EMAIL", "").strip()
+    if not sec_email:
+        with st.form("sec_email_form"):
+            st.warning(
+                "The SEC requires a contact email with every request (its fair-access policy). "
+                "Enter it once — it's saved only in this computer's `.env` file and is never uploaded to GitHub."
+            )
+            email_input = st.text_input("Contact email for SEC", placeholder="you@example.com")
+            if st.form_submit_button("Save email"):
+                if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email_input.strip()):
+                    _save_env_var("SEC_CONTACT_EMAIL", email_input.strip())
+                    background_task.clear_task("buybacks")  # drop a failed run's "email missing" error
+                    st.rerun()
+                else:
+                    st.error("That doesn't look like an email address.")
+    else:
+        st.caption(f"SEC contact email: {sec_email} (saved in this computer's .env)")
+
     days_back = st.number_input("Scan filings from the last N days", min_value=1, max_value=90, value=14, step=1)
 
-    if st.button("Scan SEC filings for buyback announcements", type="primary"):
+    if st.button("Scan SEC filings for buyback announcements", type="primary", disabled=not sec_email):
         scan_days = int(days_back)
 
         def _job(progress_cb):
