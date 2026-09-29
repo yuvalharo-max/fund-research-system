@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from src import (
     background_task,
+    buyback_analysis,
     cache,
     dataroma_client,
     magicformula_analysis,
@@ -82,7 +83,11 @@ with st.expander("⚙️ App maintenance"):
                 start_new_session=True,
             )
 
-TAB_LABELS = {"funds": "Funds Analysis", "magicformula": "Magic Formula Analysis"}
+TAB_LABELS = {
+    "funds": "Funds Analysis",
+    "magicformula": "Magic Formula Analysis",
+    "buybacks": "תוכניות רכישה עצמית",
+}
 TAB_WIDGET_KEY = "active_view_tab"
 
 STATUS_FILTER_OPTIONS = [
@@ -297,10 +302,126 @@ def _render_results(
             _render_price_chart(row["_ticker"], row["_fund_ticker"], row["Fund"], other_names, other_tickers)
 
 
+BUYBACK_COLUMNS = [
+    "Filed (ET)", "Company", "Ticker", "Event type", "Amount", "Currency", "Total authorized after",
+    "Remaining from prior program", "Expiration / duration", "Replaces prior program?", "Market cap ($M)",
+    "Supporting quote", "Filing link",
+]
+BUYBACK_COLUMN_CONFIG = {
+    "Amount": st.column_config.NumberColumn(
+        "Amount", format="compact", help="New program size, or the size of the increase (in the Currency column)"
+    ),
+    "Total authorized after": st.column_config.NumberColumn(
+        "Total authorized after", format="compact", help="Only when the filing states it"
+    ),
+    "Remaining from prior program": st.column_config.NumberColumn(
+        "Remaining from prior program", format="compact",
+        help="As stated in the filing — never added to the new amount automatically",
+    ),
+    "Market cap ($M)": st.column_config.NumberColumn("Market cap ($M)", format="localized"),
+    "Supporting quote": st.column_config.TextColumn("Supporting quote", width="large"),
+    "Filing link": st.column_config.LinkColumn("Filing", display_text="Open filing ↗"),
+}
+
+
+def _render_buybacks(df: pd.DataFrame):
+    if df.empty:
+        st.info("No buyback events found in this period.")
+        return
+
+    df = df.copy()
+    numeric = {"Amount", "Total authorized after", "Remaining from prior program", "Market cap ($M)"}
+    for col in df.columns:
+        if col not in numeric:
+            df[col] = df[col].fillna("").astype(str)  # a CSV-reloaded all-empty column comes back as float
+    df["_date"] = pd.to_datetime(df["Filed (ET)"].str[:10]).dt.date
+    size = df["Total authorized after"].fillna(df["Amount"])
+    df["_size"] = size.where(df["Currency"] != "shares")
+
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([2, 2, 3])
+        with c1:
+            date_range = st.date_input(
+                "Filing date", value=(df["_date"].min(), df["_date"].max()),
+                min_value=df["_date"].min(), max_value=df["_date"].max(), key="bb_dates",
+            )
+        with c2:
+            search = st.text_input("Company", placeholder="Name or ticker...", key="bb_search")
+        with c3:
+            types = st.multiselect(
+                "Event type", buyback_analysis.EVENT_TYPES,
+                default=[buyback_analysis.EVENT_NEW, buyback_analysis.EVENT_INCREASE], key="bb_types",
+            )
+        c4, c5 = st.columns(2)
+        with c4:
+            min_size = st.number_input(
+                "Min program size (millions, in the filing's currency)", min_value=0.0, value=0.0, step=10.0,
+                key="bb_min_size", help="Uses the total after an increase when stated, otherwise the amount. "
+                "Programs defined in number of shares are excluded once this is above 0.",
+            )
+        with c5:
+            min_cap = st.number_input("Min market cap ($M)", min_value=0.0, value=0.0, step=100.0, key="bb_min_cap")
+
+    filtered = df
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        filtered = filtered[(filtered["_date"] >= date_range[0]) & (filtered["_date"] <= date_range[1])]
+    if search:
+        filtered = filtered[
+            filtered["Company"].str.contains(search, case=False, na=False)
+            | filtered["Ticker"].str.contains(search, case=False, na=False)
+        ]
+    if types:
+        filtered = filtered[filtered["Event type"].isin(types)]
+    if min_size > 0:
+        filtered = filtered[filtered["_size"] >= min_size * 1e6]
+    if min_cap > 0:
+        filtered = filtered[filtered["Market cap ($M)"].fillna(0) >= min_cap]
+
+    counts = df["Event type"].value_counts()
+    st.caption(
+        f"Showing {len(filtered)} of {len(df)} events · "
+        + " · ".join(f"{t}: {counts.get(t, 0)}" for t in buyback_analysis.EVENT_TYPES)
+    )
+    export_df = df[[c for c in df.columns if not c.startswith("_")]]
+    st.download_button(
+        "Export to CSV", export_df.to_csv(index=False).encode("utf-8-sig"), "buyback_events.csv", "text/csv"
+    )
+    if filtered.empty:
+        st.info("No events match the current filters.")
+        return
+
+    filtered = filtered.reset_index(drop=True)
+    ROW_PX = 35
+    st.dataframe(
+        filtered[BUYBACK_COLUMNS],
+        width="stretch",
+        height=ROW_PX * (len(filtered) + 1) + 3,
+        row_height=ROW_PX,
+        column_config=BUYBACK_COLUMN_CONFIG,
+        hide_index=True,
+    )
+
+    labels = [f"{r['Company']} — {r['Event type']} ({r['Filed (ET)']})" for _, r in filtered.iterrows()]
+    chosen = st.selectbox("🔍 Full details", ["—"] + labels, key="bb_inspect")
+    if chosen == "—":
+        return
+    row = filtered.iloc[labels.index(chosen)]
+    with st.container(border=True):
+        st.markdown(f"#### {row['Company']}" + (f" ({row['Ticker']})" if row["Ticker"] else ""))
+        st.markdown(f"**{row['Event type']}** · filed {row['Filed (ET)']} · {row['Form']}")
+        st.markdown(f"> {row['Supporting quote']}".replace("$", "\\$"))
+        st.markdown(f"[Open filing ↗]({row['Filing link']}) · [Filing index ↗]({row['Filing index']})")
+
+
 def _run_or_show_results(
-    task_key: str, csv_name: str, compact_cols, detail_cols, tab_key: str, has_fund: bool, resort_fn=None
+    task_key: str, csv_name: str, compact_cols, detail_cols, tab_key: str, has_fund: bool, resort_fn=None,
+    render_fn=None,
 ):
     """Show progress for a background task, its result once done, or the last cached run."""
+    if render_fn is None:
+        def render_fn(df):
+            _render_results(df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+
     task = background_task.get_task(task_key)
 
     if task and task["status"] == "running":
@@ -315,7 +436,7 @@ def _run_or_show_results(
     elif task and task["status"] == "done":
         st.caption("Last updated: just now")
         df = resort_fn(task["result"]) if resort_fn else task["result"]
-        _render_results(df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+        render_fn(df)
     else:
         last_run = cache.load_latest_timestamp(tab_key)
         if last_run:
@@ -324,7 +445,7 @@ def _run_or_show_results(
             if cached_df is not None:
                 if resort_fn:
                     cached_df = resort_fn(cached_df)
-                _render_results(cached_df, csv_name, compact_cols, detail_cols, tab_key=tab_key, has_fund=has_fund)
+                render_fn(cached_df)
         else:
             st.info("No run yet — click the button above to get started.")
 
@@ -410,6 +531,49 @@ if selected_tab == "funds":
 
     _run_or_show_results(
         "funds", "funds_analysis.csv", compact_cols, detail_cols, tab_key="funds", has_fund=True, resort_fn=_resort
+    )
+
+elif selected_tab == "buybacks":
+    st.write(
+        "Finds companies whose board **approved a new share-buyback program** or **increased an existing "
+        "one**, from their SEC filings (8-K / 6-K). Shares a company has **already bought back** are a "
+        "separate event type (*Repurchases executed*) — they are not a new authorization."
+    )
+    st.caption(
+        "Data source: [SEC EDGAR](https://www.sec.gov/edgar/search/) full-text search. Every figure is "
+        "extracted by rules from the filing's own wording — confirm against the linked filing before acting on it."
+    )
+
+    with st.expander("ℹ️ Event types and how figures are read", expanded=False):
+        st.markdown(
+            f"- **{buyback_analysis.EVENT_NEW}** — the board approved a new program. *Amount* is its size.\n"
+            f"- **{buyback_analysis.EVENT_INCREASE}** — an existing program was enlarged. *Amount* is the size of "
+            "the increase (when the filing says \"from \\$2B to \\$3B\", that's \\$1B); *Total authorized after* is "
+            "filled only when the filing states it.\n"
+            f"- **{buyback_analysis.EVENT_EXECUTED}** — shares actually bought back (money already spent), "
+            "not permission to buy.\n"
+            f"- **{buyback_analysis.EVENT_REVIEW}** — the filing looks like a buyback decision but the rules "
+            "couldn't pin down the details (e.g. only a headline or slide mentions it).\n\n"
+            "*Remaining from prior program* is shown exactly as stated and is **never** added to the new amount. "
+            "Mentions of older programs (\"as previously announced in April…\") are not counted as new events."
+        )
+
+    days_back = st.number_input("Scan filings from the last N days", min_value=1, max_value=90, value=14, step=1)
+
+    if st.button("Scan SEC filings for buyback announcements", type="primary"):
+        scan_days = int(days_back)
+
+        def _job(progress_cb):
+            df = buyback_analysis.run_buyback_scan(days_back=scan_days, progress_callback=progress_cb)
+            cache.save_run("buybacks", df)
+            return df
+
+        if not background_task.start_task("buybacks", _job):
+            st.warning("A buyback scan is already in progress.")
+
+    _run_or_show_results(
+        "buybacks", "buyback_events.csv", None, None, tab_key="buybacks", has_fund=False,
+        render_fn=_render_buybacks,
     )
 
 else:
