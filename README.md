@@ -36,6 +36,16 @@ osacompile -o ~/Desktop/"Fund Research Tool.app" /tmp/launcher.applescript
 
 (יש כזו כבר על שולחן העבודה של Noy — `Fund Research Tool.app`. היא ספציפית למחשב הזה כי היא לא חלק מה-git repo; במחשב אחר צריך ליצור אותה מחדש עם השלבים שלמעלה, עם הנתיב המקומי הנכון.)
 
+כדי שלאפליקציה שעל שולחן העבודה יהיה הלוגו של הכלי (במקום אייקון ברירת המחדל של AppleScript), להריץ משורש הפרויקט אחרי שיוצרים אותה:
+
+```bash
+APP=~/Desktop/"Fund Research Tool.app"
+cp "Fund Research Tool.app/Contents/Resources/AppIcon.icns" "$APP/Contents/Resources/applet.icns"
+rm -f "$APP/Contents/Resources/Assets.car"
+/usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$APP/Contents/Info.plist"
+xattr -cr "$APP" && codesign --force --deep -s - "$APP" && touch "$APP"
+```
+
 בפעם הראשונה שלוחצים על האפליקציה, macOS עשוי להציג אזהרת "מפתח לא מזוהה" — קליק ימני → Open פותר את זה חד-פעמית.
 
 **אלטרנטיבה פשוטה יותר:** `start.command` בשורש הפרויקט — לחיצה כפולה עליו פותחת טרמינל, מפעילה את השרת, מזהה אוטומטית באיזה פורט הוא עלה (למקרה ש-8501 תפוס), ופותחת את הדפדפן. סגירת חלון הטרמינל עוצרת את השרת. לא דורש יצירת אפליקציה נפרדת — זה כבר קובץ שאפשר ללחוץ עליו ישירות (ייתכן שתצטרכי לאשר "מפתח לא מזוהה" בפעם הראשונה, כמו לעיל).
